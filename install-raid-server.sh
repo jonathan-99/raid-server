@@ -24,22 +24,18 @@ EOF
 
 
 # check the sda for the usb
-arr=()
-var=$(blkid -o device | read output | egrep -i dev)
-while true
-do
-  vari=${var#*/}
-  vari=${vari%:}
-  arr+=(vari)
-done
+lsblk
 
-while read -r; do
-  printf 'the result %s\n' "$(blkid)"
-done < <(blkid -o device)
+array=$(lsblk | awk '{print $1}' | sed 's/^.*:vme//')
+#array=$( ${array[@]:1} )
+#for items in $array; do echo $items; done
+array=$(echo $array | awk '{print $3,$4,$5}')
+
+echo $array
 
 # make the usb drives raid devices
 echo Make usb devices raid devices
-mdadm --create --verbose /dev/md/vo1 --level=1 --raid-devices=2 /dev/sda /dev/sdb
+mdadm --create --verbose /dev/md/vo1 --level=1 --raid-devices=2 $array
 
 # making the new drive ext4 format
 echo Make the drive ext4 format
