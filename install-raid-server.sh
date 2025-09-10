@@ -8,9 +8,9 @@ set -euo pipefail
 
 LOG_FILE="/var/log/raid_setup.log"
 
-log()   { echo "[INFO]  $*" | tee -a "$LOG_FILE"; }
-warn()  { echo "[WARN]  $*" | tee -a "$LOG_FILE"; }
-error() { echo "[ERROR] $*" | tee -a "$LOG_FILE" >&2; }
+log()   { echo "[JUMPBOX] [INFO]  $*" | tee -a "$LOG_FILE"; }
+warn()  { echo "[JUMPBOX] [WARN]  $*" | tee -a "$LOG_FILE"; }
+error() { echo "[JUMPBOX] [ERROR] $*" | tee -a "$LOG_FILE" >&2; }
 
 # Trap unexpected errors
 trap 'error "Script failed at line $LINENO. Exit code: $?"' ERR
