@@ -36,7 +36,12 @@ pre_checks() {
         error "You must have sudo privileges to run this script."
         exit 1
     fi
-    log "Pre-checks passed."
+    if [[ "$(hostname)" == "jumpbox" ]]; then
+        error "This script is running on the jumpbox (hostname=$(hostname)). Aborting."
+        exit 1
+    fi  
+  
+    log "Pre-checks passed."    
 }
 
 setting_unit_firewall_rules() {
