@@ -51,19 +51,21 @@ run_install_on_target() {
     echo "Target: $ip" >>"$target_log"
 
     log "[${ip}] Copying orchestration and helper scripts..."
-    for script in "${HELPER_SCRIPTS[@]}"; do
+    for script in device_updater.sh firewall_setup.sh raid_checks.sh install-raid-server.sh; do
         scp -q -P "$SSH_PORT" "$SCRIPT_DIR/$script" "${SSH_USER}@${ip}:/tmp/$script" >>"$target_log" 2>&1
-        ssh -t -p "$SSH_PORT" "${SSH_USER}@${ip}" "chmod +x /tmp/$script" >>"$target_log" 2>&1
+        ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "${SSH_USER}@${ip}" "chmod +x /tmp/$script" >>"$target_log" 2>&1
     done
 
     log "[${ip}] Running RAID setup..."
-    # Capture hostname from target
+    # Capture actual hostname
     local target_host
-    target_host=$(ssh -p "$SSH_PORT" "${SSH_USER}@${ip}" "hostname" 2>/dev/null || echo "$ip")
+    target_host=$(ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "${SSH_USER}@${ip}" "hostname" 2>/dev/null || echo "$ip")
 
-    ssh -t -p "$SSH_PORT" "${SSH_USER}@${ip}" "/tmp/install-raid-server.sh" >>"$target_log" 2>&1
+    # Run RAID setup
+    ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "${SSH_USER}@${ip}" "/tmp/install-raid-server.sh" >>"$target_log" 2>&1
     local status=$?
 
+    # Write summary
     echo "${target_host},${ip},${status}" >"$summary_tmp"
     if [[ $status -eq 0 ]]; then
         echo -e "${GREEN}[${target_host}] ✅ Installation succeeded${NC}"
@@ -71,6 +73,7 @@ run_install_on_target() {
         echo -e "${RED}[${target_host}] ❌ Installation failed. See $target_log${NC}"
     fi
 }
+
 
 
 draw_summary_table() {
@@ -125,6 +128,7 @@ main() {
     done
 
     wait
+    > "$LOG_DIR/raid_install_summary.csv"
     for tmpfile in "$LOG_DIR"/summary_*.tmp; do
         [[ -f "$tmpfile" ]] || continue
         cat "$tmpfile" >>"$LOG_DIR/raid_install_summary.csv"
