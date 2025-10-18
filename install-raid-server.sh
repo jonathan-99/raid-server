@@ -42,11 +42,11 @@ else
 fi
 
 # --- Step 4: RAID installation ---
-if [[ -x /tmp/install_raid_server.sh ]]; then
+if [[ -x /tmp/install-raid-server.sh ]]; then
     log "Running RAID installation..."
-    /tmp/install_raid_server.sh | stdbuf -oL tee -a "$LOG_FILE"
+    /tmp/install-raid-server.sh | stdbuf -oL tee -a "$LOG_FILE"
 else
-    error "install_raid_server.sh not found or not executable."
+    error "install-raid-server.sh not found or not executable."
 fi
 
 log "RAID setup completed successfully on ${TARGET_HOSTNAME}."
