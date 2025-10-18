@@ -45,7 +45,7 @@ check_ssh() {
 run_install_on_target() {
     local ip="$1"
     local target_log="$LOG_DIR/install_${ip}.log"
-    local summary_csv="$LOG_DIR/raid_install_summary.csv"
+    local summary_tmp="$LOG_DIR/summary_${ip}.tmp"
 
     echo "===== RAID INSTALL START: $(date) =====" >"$target_log"
     echo "Target: $ip" >>"$target_log"
@@ -57,17 +57,21 @@ run_install_on_target() {
     done
 
     log "[${ip}] Running RAID setup..."
+    # Capture hostname from target
+    local target_host
+    target_host=$(ssh -p "$SSH_PORT" "${SSH_USER}@${ip}" "hostname" 2>/dev/null || echo "$ip")
+
     ssh -t -p "$SSH_PORT" "${SSH_USER}@${ip}" "/tmp/install-raid-server.sh" >>"$target_log" 2>&1
-
     local status=$?
-    echo "$ip,$status" >>"$summary_csv"
 
+    echo "${target_host},${ip},${status}" >"$summary_tmp"
     if [[ $status -eq 0 ]]; then
-        echo -e "${GREEN}[${ip}] ✅ Installation succeeded${NC}"
+        echo -e "${GREEN}[${target_host}] ✅ Installation succeeded${NC}"
     else
-        echo -e "${RED}[${ip}] ❌ Installation failed. See $target_log${NC}"
+        echo -e "${RED}[${target_host}] ❌ Installation failed. See $target_log${NC}"
     fi
 }
+
 
 draw_summary_table() {
     local summary_csv="$LOG_DIR/raid_install_summary.csv"
@@ -121,6 +125,10 @@ main() {
     done
 
     wait
+    for tmpfile in "$LOG_DIR"/summary_*.tmp; do
+        [[ -f "$tmpfile" ]] || continue
+        cat "$tmpfile" >>"$LOG_DIR/raid_install_summary.csv"
+    done
     draw_summary_table
 }
 
