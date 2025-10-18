@@ -44,36 +44,31 @@ check_ssh() {
 
 run_install_on_target() {
     local ip="$1"
-    local target_log="$LOG_DIR/install_${ip}.log"
-    local summary_tmp="$LOG_DIR/summary_${ip}.tmp"
+    local log_file="$LOG_DIR/install_${ip}.log"
 
-    echo "===== RAID INSTALL START: $(date) =====" >"$target_log"
-    echo "Target: $ip" >>"$target_log"
+    echo "===== RAID INSTALL START: $(date) =====" >"$log_file"
+    echo "Target: $ip" >>"$log_file"
 
     log "[${ip}] Copying orchestration and helper scripts..."
     for script in device_updater.sh firewall_setup.sh raid_checks.sh install-raid-server.sh; do
-        scp -q -P "$SSH_PORT" "$SCRIPT_DIR/$script" "${SSH_USER}@${ip}:/tmp/$script" >>"$target_log" 2>&1
-        ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "${SSH_USER}@${ip}" "chmod +x /tmp/$script" >>"$target_log" 2>&1
+        scp -q -P "$SSH_PORT" "$SCRIPT_DIR/$script" "${SSH_USER}@${ip}:/tmp/$script" >>"$log_file" 2>&1
+        ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "${SSH_USER}@${ip}" "chmod +x /tmp/$script" >>"$log_file" 2>&1
     done
 
     log "[${ip}] Running RAID setup..."
-    # Capture actual hostname
     local target_host
     target_host=$(ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "${SSH_USER}@${ip}" "hostname" 2>/dev/null || echo "$ip")
-
-    # Run RAID setup
-    ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "${SSH_USER}@${ip}" "/tmp/install-raid-server.sh" >>"$target_log" 2>&1
+    ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "${SSH_USER}@${ip}" "/tmp/install-raid-server.sh" >>"$log_file" 2>&1
     local status=$?
 
-    # Write summary
-    echo "${target_host},${ip},${status}" >"$summary_tmp"
+    echo "${target_host},${ip},${status}" >>"$LOG_DIR/raid_install_summary.csv"
+
     if [[ $status -eq 0 ]]; then
         echo -e "${GREEN}[${target_host}] ✅ Installation succeeded${NC}"
     else
-        echo -e "${RED}[${target_host}] ❌ Installation failed. See $target_log${NC}"
+        echo -e "${RED}[${target_host}] ❌ Installation failed. See $log_file${NC}"
     fi
 }
-
 
 
 draw_summary_table() {
