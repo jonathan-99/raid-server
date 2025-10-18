@@ -6,7 +6,7 @@ set -euo pipefail
 
 SSH_USER="pi"
 SSH_PORT="22"
-INSTALL_SCRIPT_NAME="install_raid_server.sh"
+INSTALL_SCRIPT_NAME="install-raid-server.sh"
 MAX_PARALLEL=3
 
 # --- Color codes ---
