@@ -1,103 +1,97 @@
 #!/usr/bin/env bash
-# Orchestrator for Raspberry Pi RAID setup from a jumpbox.
-# - You will chmod +x this script on the jumpbox.
-# - Other scripts (like install-raid-server.sh) need not be executable locally;
-#   this orchestrator will copy them to the target and chmod/execute remotely.
+# Multi-target orchestrator for Raspberry Pi RAID setup.
+# Supports simultaneous installation with aggregated summary and per-device logging.
 
 set -euo pipefail
 
-# Defaults
 SSH_USER="pi"
 SSH_PORT="22"
-
-# Files expected to be in the SAME DIRECTORY as this orchestrator
 INSTALL_SCRIPT_NAME="install-raid-server.sh"
+MAX_PARALLEL=3
+
+# --- Color codes ---
+GREEN="\033[1;32m"
+RED="\033[1;31m"
+YELLOW="\033[1;33m"
+NC="\033[0m"  # No color
 
 usage() {
   cat <<EOF
 Usage:
-  $(basename "$0") <TARGET_IP> [--return-usb-devices] [--user <user>] [--port <port>] [--help]
+  $(basename "$0") <TARGET_IP> [TARGET_IP ...] [options]
 
 Examples:
-  # Run full RAID setup remotely on 192.168.1.50
-  $(basename "$0") 192.168.1.50
+  # Install RAID on 3 devices simultaneously
+  $(basename "$0") 192.168.3.101 192.168.3.102 192.168.3.103
 
-  # Only list USB disk devices (read-only) on the target
-  $(basename "$0") 192.168.1.50 --return-usb-devices
+  # Just list USB disks on one device
+  $(basename "$0") 192.168.3.101 --return-usb-devices
 
-  # Specify SSH user and port
-  $(basename "$0") 192.168.1.50 --user ubuntu --port 2222
-
-Args:
-  <TARGET_IP>                 IP address (or hostname) of the Raspberry Pi target.
-
-Flags:
-  --return-usb-devices        Print registered USB disk devices on the target (one per line), then exit.
-  --user <user>               SSH username (default: pi).
-  --port <port>               SSH port (default: 22).
-  --help                      Show this help.
-
-Notes:
-  * This script runs on the jumpbox.
-  * All project scripts should be in the same directory as this file.
-  * The install script will be copied to the target and executed with sudo.
+Options:
+  --return-usb-devices        List USB disks on one target only.
+  --user <user>               SSH username (default: pi)
+  --port <port>               SSH port (default: 22)
+  --max-parallel <n>          Limit concurrent installations (default: 3)
+  --help                      Show this help message
 EOF
 }
 
-log()   { echo "[INFO]  $*"; }
-warn()  { echo "[WARN]  $*" >&2; }
-error() { echo "[ERROR] $*" >&2; }
+log()   { echo -e "[INFO]  $*"; }
+warn()  { echo -e "${YELLOW}[WARN]  $*${NC}" >&2; }
+error() { echo -e "${RED}[ERROR] $*${NC}" >&2; }
 
-# Locate script dir (so we can SCP sibling files)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 require_files() {
-  local missing=0
-  for f in "$SCRIPT_DIR/$INSTALL_SCRIPT_NAME"; do
-    if [[ ! -f "$f" ]]; then
-      error "Missing required file: $f"
-      missing=1
-    fi
-  done
-  if [[ $missing -ne 0 ]]; then
+  [[ -f "$SCRIPT_DIR/$INSTALL_SCRIPT_NAME" ]] || {
+    error "Missing required file: $SCRIPT_DIR/$INSTALL_SCRIPT_NAME"
     exit 1
-  fi
+  }
 }
 
-# Return 0 if SSH is reachable
 check_ssh() {
   local ip="$1"
-  if ! timeout 5 bash -c "</dev/tcp/${ip}/${SSH_PORT}" >/dev/null 2>&1; then
-    warn "TCP ${ip}:${SSH_PORT} not immediately reachable; continuing to try SSH anyway..."
-  fi
   if ! ssh -o BatchMode=yes -o ConnectTimeout=8 -p "$SSH_PORT" "${SSH_USER}@${ip}" 'true' 2>/dev/null; then
-    warn "Passwordless SSH may not be configured. You may be prompted for password or key passphrase."
+    warn "SSH to $ip may require password or key passphrase."
   fi
 }
 
-# Copy and execute install script remotely
 run_full_install() {
   local ip="$1"
   local remote_tmp="/tmp/${INSTALL_SCRIPT_NAME}"
+  local log_file="/tmp/raid_install_${ip}.log"
 
-  log "Copying ${INSTALL_SCRIPT_NAME} to ${ip}:${remote_tmp}"
-  scp -P "$SSH_PORT" "$SCRIPT_DIR/$INSTALL_SCRIPT_NAME" "${SSH_USER}@${ip}:${remote_tmp}"
+  echo -e "${YELLOW}[$ip] Starting installation...${NC}"
+  {
+    echo "===== RAID INSTALL START: $(date) ====="
+    echo "Target: $ip"
+  } >"$log_file"
 
-  log "Setting execute bit and running install on ${ip}..."
-  # shellcheck disable=SC2029
-  ssh -t -p "$SSH_PORT" "${SSH_USER}@${ip}" bash -lc "
-    set -euo pipefail
-    sudo chmod +x '${remote_tmp}'
-    sudo '${remote_tmp}'
-  "
-  log "Install completed on ${ip}."
+  {
+    echo "[INFO] Copying install script..."
+    scp -q -P "$SSH_PORT" "$SCRIPT_DIR/$INSTALL_SCRIPT_NAME" "${SSH_USER}@${ip}:${remote_tmp}"
+
+    echo "[INFO] Running remote installation..."
+    ssh -t -p "$SSH_PORT" "${SSH_USER}@${ip}" bash -lc "
+      set -euo pipefail
+      sudo chmod +x '${remote_tmp}'
+      sudo '${remote_tmp}'
+    "
+
+    echo "[INFO] Installation completed successfully."
+  } >>"$log_file" 2>&1
+
+  local status=$?
+  if [[ $status -eq 0 ]]; then
+    echo -e "${GREEN}[$ip] ✅ Installation succeeded.${NC}"
+  else
+    echo -e "${RED}[$ip] ❌ Installation failed. See $log_file${NC}"
+  fi
+  echo "$ip,$status" >>/tmp/raid_install_summary.csv
 }
 
-# Remote, read-only listing of USB disk devices
 remote_list_usb_disks() {
   local ip="$1"
-  # This command prefers lsblk TRAN; falls back to sysfs
-  # shellcheck disable=SC2029
   ssh -p "$SSH_PORT" "${SSH_USER}@${ip}" bash -lc '
     set -euo pipefail
     if lsblk -ndo NAME,TYPE,TRAN >/dev/null 2>&1; then
@@ -114,45 +108,77 @@ remote_list_usb_disks() {
   '
 }
 
-main() {
-  if [[ $# -lt 1 ]]; then
-    usage
-    exit 2
-  fi
+draw_summary_table() {
+  echo
+  echo "========= RAID INSTALL SUMMARY ========="
+  printf "%-15s | %-10s | %-30s\n" "DEVICE" "STATUS" "LOG FILE"
+  echo "----------------------------------------"
 
-  local target_ip="$1"; shift || true
-  local MODE="install"  # default behavior: run full install on target
+  while IFS=, read -r ip status; do
+    if [[ "$status" -eq 0 ]]; then
+      printf "%-15s | ${GREEN}%-10s${NC} | %s\n" "$ip" "SUCCESS" "/tmp/raid_install_${ip}.log"
+    else
+      printf "%-15s | ${RED}%-10s${NC} | %s\n" "$ip" "FAILED" "/tmp/raid_install_${ip}.log"
+    fi
+  done </tmp/raid_install_summary.csv
+
+  echo "========================================"
+}
+
+main() {
+  if [[ $# -lt 1 ]]; then usage; exit 2; fi
+
+  local MODE="install"
+  local targets=()
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --return-usb-devices)
-        MODE="list_usb"
-        shift
-        ;;
-      --user)
-        SSH_USER="${2:-}"; shift 2 || { error "--user requires a value"; exit 2; }
-        ;;
-      --port)
-        SSH_PORT="${2:-}"; shift 2 || { error "--port requires a value"; exit 2; }
-        ;;
-      --help|-h)
-        usage; exit 0 ;;
+      --return-usb-devices) MODE="list_usb"; shift ;;
+      --user) SSH_USER="${2:-}"; shift 2 ;;
+      --port) SSH_PORT="${2:-}"; shift 2 ;;
+      --max-parallel) MAX_PARALLEL="${2:-3}"; shift 2 ;;
+      --help|-h) usage; exit 0 ;;
       *)
-        error "Unknown argument: $1"; usage; exit 2 ;;
+        if [[ "$1" == -* ]]; then
+          error "Unknown option: $1"; usage; exit 2
+        fi
+        targets+=("$1"); shift
+        ;;
     esac
   done
 
-  require_files
-  check_ssh "$target_ip"
+  if [[ ${#targets[@]} -eq 0 ]]; then
+    error "No target IPs provided."; usage; exit 2
+  fi
 
+  require_files
+
+  # Single-device USB listing mode
   if [[ "$MODE" == "list_usb" ]]; then
-    log "Querying USB disk devices on ${target_ip}..."
-    remote_list_usb_disks "$target_ip"
+    if [[ ${#targets[@]} -ne 1 ]]; then
+      error "--return-usb-devices must be used with exactly one target."
+      exit 2
+    fi
+    local ip="${targets[0]}"
+    log "Querying USB disks on $ip..."
+    remote_list_usb_disks "$ip"
     exit 0
   fi
 
-  # Default: copy and run install script on target
-  run_full_install "$target_ip"
+  # Clean previous summary
+  rm -f /tmp/raid_install_summary.csv
+
+  log "Starting RAID installations on ${#targets[@]} devices (max $MAX_PARALLEL parallel)..."
+
+  # Run in parallel
+  for ip in "${targets[@]}"; do
+    check_ssh "$ip"
+    run_full_install "$ip" &
+    ((++count >= MAX_PARALLEL)) && wait -n && ((count--))
+  done
+
+  wait
+  draw_summary_table
 }
 
 main "$@"
