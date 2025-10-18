@@ -15,9 +15,15 @@ RED="\033[1;31m"
 YELLOW="\033[1;33m"
 NC="\033[0m"  # No color
 
+# Set up scripts paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="$SCRIPT_DIR/logs"
 mkdir -p "$LOG_DIR"
+
+SUMMARY_CSV="$LOG_DIR/raid_install_summary.csv"
+# Clean previous summary
+rm -f "$SUMMARY_CSV"
+
 
 usage() {
   cat <<EOF
