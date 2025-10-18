@@ -106,14 +106,14 @@ draw_summary_table() {
   echo "========= RAID INSTALL SUMMARY ========="
   printf "%-15s | %-10s | %-40s\n" "HOSTNAME/IP" "STATUS" "LOG FILE"
   echo "----------------------------------------"
-  while IFS=, read -r ip status; do
+  while IFS=, read -r hostname ip status; do
     local log_file="$LOG_DIR/install_${ip}.log"
     if [[ "$status" -eq 0 ]]; then
       printf "%-15s | ${GREEN}%-10s${NC} | %s\n" "$ip" "SUCCESS" "$log_file"
     else
       printf "%-15s | ${RED}%-10s${NC} | %s\n" "$ip" "FAILED" "$log_file"
     fi
-  done <"$LOG_DIR/raid_install_summary.csv"
+  done <"$SUMMARY_CSV"
   echo "========================================"
 }
 
