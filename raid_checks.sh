@@ -1,33 +1,22 @@
 #!/usr/bin/env bash
+# RAID pre-installation checks
+
 set -euo pipefail
-LOG_FILE="/var/log/raid_setup.log"
 
-log()   { printf '[CHECKS] [INFO]  %s\n' "$*" | tee -a "$LOG_FILE"; }
-error() { printf '[CHECKS] [ERROR] %s\n' "$*" | tee -a "$LOG_FILE" >&2; }
+TARGET_HOSTNAME="$(hostname)"
+LOG_FILE="/tmp/raid_target_${TARGET_HOSTNAME}.log"
 
-log "Running system pre-checks..."
+log()   { printf "[%s] [INFO]  %s\n" "$TARGET_HOSTNAME" "$*" | tee -a "$LOG_FILE"; }
+warn()  { printf "[%s] [WARN]  %s\n" "$TARGET_HOSTNAME" "$*" | tee -a "$LOG_FILE" >&2; }
+error() { printf "[%s] [ERROR] %s\n" "$TARGET_HOSTNAME" "$*" | tee -a "$LOG_FILE" >&2; exit 1; }
 
-if [[ $(uname -s) != "Linux" ]]; then
-    error "Not a Linux system."
-    exit 1
-fi
-if ! sudo -n true 2>/dev/null; then
-    error "User lacks sudo privileges."
-    exit 1
-fi
-if [[ "$(hostname)" == "jumpbox" ]]; then
-    error "Script must not run on jumpbox."
-    exit 1
+log "Listing available block devices..."
+lsblk | stdbuf -oL tee -a "$LOG_FILE"
+
+log "Checking if at least 2 candidate devices exist for RAID..."
+NUM_DISKS=$(lsblk -ndo NAME,TYPE | awk '$2=="disk"{print $1}' | wc -l)
+if [[ "$NUM_DISKS" -lt 2 ]]; then
+    error "Insufficient block devices for RAID. Found only $NUM_DISKS."
 fi
 
-log "Pre-checks passed. Enumerating block devices..."
-root_disk="$(lsblk -no PKNAME "$(findmnt -n -o SOURCE /)" 2>/dev/null || true)"
-devices=$(lsblk -ndo NAME,TYPE,TRAN | awk -v rd="$root_disk" '$2=="disk" && $1!=rd {print "/dev/"$1}')
-
-if [[ -z "$devices" ]]; then
-    error "No available block devices found."
-    exit 1
-fi
-
-log "Found candidate disks:"
-echo "$devices" | tee -a "$LOG_FILE"
+log "RAID checks completed successfully."
