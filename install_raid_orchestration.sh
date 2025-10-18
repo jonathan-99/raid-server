@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Multi-target orchestrator for Raspberry Pi RAID setup.
 # Supports simultaneous installation with aggregated summary and per-device logging.
+# Logs use the target hostname, not the jumpbox hostname.
 
 set -euo pipefail
 
 SSH_USER="pi"
 SSH_PORT="22"
-INSTALL_SCRIPT_NAME="install-raid-server.sh"
+INSTALL_SCRIPT_NAME="raid_server_manager.sh"  # now runs all local scripts
 MAX_PARALLEL=3
 
 # --- Color codes ---
@@ -56,42 +57,55 @@ check_ssh() {
   fi
 }
 
+get_remote_hostname() {
+  local ip="$1"
+  ssh -o ConnectTimeout=5 -p "$SSH_PORT" "${SSH_USER}@${ip}" 'hostname' 2>/dev/null || echo "$ip"
+}
+
 run_full_install() {
   local ip="$1"
+  local hostname
+  hostname="$(get_remote_hostname "$ip")"
   local remote_tmp="/tmp/${INSTALL_SCRIPT_NAME}"
-  local log_file="/tmp/raid_install_${ip}.log"
+  local local_log="${SCRIPT_DIR}/install_${hostname}.log"
 
-  echo -e "${YELLOW}[$ip] Starting installation...${NC}"
+  echo -e "${YELLOW}[${hostname}] Starting installation...${NC}"
   {
     echo "===== RAID INSTALL START: $(date) ====="
-    echo "Target: $ip"
-  } >"$log_file"
+    echo "Target: ${hostname} (${ip})"
+  } >"$local_log"
 
   {
-    echo "[INFO] Copying install script..."
-    scp -q -P "$SSH_PORT" "$SCRIPT_DIR/$INSTALL_SCRIPT_NAME" "${SSH_USER}@${ip}:${remote_tmp}"
+    echo "[${hostname}] Copying orchestration script..."
+    scp -q -P "$SSH_PORT" "$SCRIPT_DIR"/*.sh "${SSH_USER}@${ip}:/tmp/"
 
-    echo "[INFO] Running remote installation..."
+    echo "[${hostname}] Running remote RAID setup..."
     ssh -t -p "$SSH_PORT" "${SSH_USER}@${ip}" bash -lc "
       set -euo pipefail
-      sudo chmod +x '${remote_tmp}'
-      sudo '${remote_tmp}'
+      cd /tmp
+      sudo chmod +x ${INSTALL_SCRIPT_NAME}
+      sudo ./${INSTALL_SCRIPT_NAME}
     "
 
-    echo "[INFO] Installation completed successfully."
-  } >>"$log_file" 2>&1
+    echo "[${hostname}] Installation completed successfully."
+  } >>"$local_log" 2>&1
 
   local status=$?
   if [[ $status -eq 0 ]]; then
-    echo -e "${GREEN}[$ip] ✅ Installation succeeded.${NC}"
+    echo -e "${GREEN}[${hostname}] ✅ Installation succeeded.${NC}"
   else
-    echo -e "${RED}[$ip] ❌ Installation failed. See $log_file${NC}"
+    echo -e "${RED}[${hostname}] ❌ Installation failed. See ${local_log}${NC}"
   fi
-  echo "$ip,$status" >>/tmp/raid_install_summary.csv
+
+  echo "${hostname},${ip},${status},${local_log}" >>"${SCRIPT_DIR}/raid_install_summary.csv"
 }
 
 remote_list_usb_disks() {
   local ip="$1"
+  local hostname
+  hostname="$(get_remote_hostname "$ip")"
+
+  log "Querying USB disks on ${hostname} (${ip})..."
   ssh -p "$SSH_PORT" "${SSH_USER}@${ip}" bash -lc '
     set -euo pipefail
     if lsblk -ndo NAME,TYPE,TRAN >/dev/null 2>&1; then
@@ -111,18 +125,18 @@ remote_list_usb_disks() {
 draw_summary_table() {
   echo
   echo "========= RAID INSTALL SUMMARY ========="
-  printf "%-15s | %-10s | %-30s\n" "DEVICE" "STATUS" "LOG FILE"
-  echo "----------------------------------------"
+  printf "%-15s | %-15s | %-10s | %-35s\n" "HOSTNAME" "IP" "STATUS" "LOG FILE"
+  echo "--------------------------------------------------------------------------"
 
-  while IFS=, read -r ip status; do
+  while IFS=, read -r hostname ip status logfile; do
     if [[ "$status" -eq 0 ]]; then
-      printf "%-15s | ${GREEN}%-10s${NC} | %s\n" "$ip" "SUCCESS" "/tmp/raid_install_${ip}.log"
+      printf "%-15s | %-15s | ${GREEN}%-10s${NC} | %s\n" "$hostname" "$ip" "SUCCESS" "$logfile"
     else
-      printf "%-15s | ${RED}%-10s${NC} | %s\n" "$ip" "FAILED" "/tmp/raid_install_${ip}.log"
+      printf "%-15s | %-15s | ${RED}%-10s${NC} | %s\n" "$hostname" "$ip" "FAILED" "$logfile"
     fi
-  done </tmp/raid_install_summary.csv
+  done <"${SCRIPT_DIR}/raid_install_summary.csv"
 
-  echo "========================================"
+  echo "=========================================================================="
 }
 
 main() {
@@ -130,6 +144,7 @@ main() {
 
   local MODE="install"
   local targets=()
+  local count=0
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -159,18 +174,15 @@ main() {
       error "--return-usb-devices must be used with exactly one target."
       exit 2
     fi
-    local ip="${targets[0]}"
-    log "Querying USB disks on $ip..."
-    remote_list_usb_disks "$ip"
+    remote_list_usb_disks "${targets[0]}"
     exit 0
   fi
 
   # Clean previous summary
-  rm -f /tmp/raid_install_summary.csv
+  rm -f "${SCRIPT_DIR}/raid_install_summary.csv"
 
   log "Starting RAID installations on ${#targets[@]} devices (max $MAX_PARALLEL parallel)..."
 
-  # Run in parallel
   for ip in "${targets[@]}"; do
     check_ssh "$ip"
     run_full_install "$ip" &
