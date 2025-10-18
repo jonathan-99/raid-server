@@ -8,11 +8,11 @@ The orchestrator supports **simultaneous installations**, aggregated summaries, 
 
 ## Directory Structure
 
-raid-server/
-├── install_raid_orchestration.sh # Multi-target orchestrator
-├── ssh_setup.sh # Helper script to ensure passwordless SSH
-├── install-raid-server.sh # Script executed on each Raspberry Pi target
-└── logs/ # Automatically created; stores per-device logs and summary
+raid-server/ <br>
+├── install_raid_orchestration.sh # Multi-target orchestrator<br>
+├── ssh_setup.sh # Helper script to ensure passwordless SSH<br>
+├── install-raid-server.sh # Script executed on each Raspberry Pi target<br>
+└── logs/ # Automatically created; stores per-device logs and summary<br>
 
 ---
 
