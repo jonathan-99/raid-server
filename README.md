@@ -34,33 +34,37 @@ raid-server/ <br>
 
 ```bash
 git clone <your-repo-url> raid-server
-cd raid-server```
+cd raid-server
+```
 
 2. **Make scripts executable:**
-```chmod +x install_raid_orchestration.sh ssh_setup.sh install-raid-server.sh```
+```bash
+chmod +x install_raid_orchestration.sh ssh_setup.sh install-raid-server.sh
+```
 
 3. **Ensure logs/ directory exists:**
-```mkdir -p logs```
+```bash
+mkdir -p logs
+```
 
 ## Usage
 1. Install RAID on one or more Raspberry Pi targets
-```./install_raid_orchestration.sh <IP1> <IP2> ... [options]```
+```bash
+./install_raid_orchestration.sh <IP1> <IP2> ... [options]
+```
 
 
 This will:
-
-Verify SSH access via ssh_setup.sh
-
-Copy install-raid-server.sh to each target
-
-Execute the RAID installation
-
-Log output per device to logs/<hostname>_install.log
-
-Generate an aggregated summary table at the end
+-Verify SSH access via ssh_setup.sh<br>
+-Copy install-raid-server.sh to each target<br>
+-Execute the RAID installation<br>
+-Log output per device to logs/<hostname>_install.log<br>
+-Generate an aggregated summary table at the end<br>
 
 2. **List USB disks on a single target**
-```./install_raid_orchestration.sh 192.168.3.101 --return-usb-devices```
+```bash
+./install_raid_orchestration.sh 192.168.3.101 --return-usb-devices
+```
 
 Options.
 | Option                 | Description                                  | Default |
