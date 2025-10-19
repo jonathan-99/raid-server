@@ -17,7 +17,7 @@
 #
 # OUTPUT:
 #   Logs in ./logs/install_<hostname>.log
-#   Summary: ./logs/raid_install_summary.csv
+#   Summary: <RAID_FOLDER>/raid_install_summary.csv
 # ============================================================
 
 set -euo pipefail
@@ -25,9 +25,10 @@ set -euo pipefail
 # --- Configuration ---
 SSH_USER="pi"
 SSH_PORT=22
-LOG_DIR="/home/pinas/raid-server/logs"
-SUMMARY_FILE="${LOG_DIR}/raid_install_summary.csv"
-SCRIPTS_DIR="/home/pinas/raid-server"
+RAID_DIR="/home/pinas/raid-server"
+LOG_DIR="${RAID_DIR}/logs"
+SUMMARY_FILE="${RAID_DIR}/raid_install_summary.csv"
+SCRIPTS_DIR="${RAID_DIR}"
 
 # --- Script file names (centralized) ---
 SCRIPT_INSTALL_TARGET="install_raid_target.sh"
@@ -54,7 +55,7 @@ fi
 TARGETS=("$@")
 
 log "===== RAID INSTALL START: $(date) ====="
-printf "HOSTNAME,IP,STATUS,LOG FILE\n" > "$SUMMARY_FILE"
+printf "HOSTNAME,IP,STATUS,RAID_DEVICES,LOG FILE\n" > "$SUMMARY_FILE"
 
 # --- Cleanup function ---
 cleanup_remote() {
@@ -68,14 +69,21 @@ copy_script() {
     local script="$2"
     local target_log="$3"
 
-    # log "[${target}] Copying ${script} to /tmp..."
+    log "[${target}] Copying ${script} to /tmp..."
     if scp -P "$SSH_PORT" "$SCRIPTS_DIR/$script" "${SSH_USER}@${target}:/tmp/" >>"$target_log" 2>&1; then
         ssh -p "$SSH_PORT" "${SSH_USER}@${target}" "sudo chmod +x /tmp/${script}" \
             || error "[${target}] Failed to set executable permission on ${script}!"
-        # log "[${target}] ${script} copied and chmod +x successfully."
+        log "[${target}] ${script} copied and chmod +x successfully."
     else
         error "[${target}] Failed to copy ${script}!"
     fi
+}
+
+# --- Function to get RAID candidate devices ---
+get_raid_devices() {
+    local target="$1"
+    ssh -p "$SSH_PORT" "${SSH_USER}@${target}" \
+        "lsblk -ndo NAME,TYPE | awk '\$2==\"disk\" {print \"/dev/\"\$1}' | head -n 2 | tr '\n' ',' | sed 's/,\$//'"
 }
 
 # --- Start orchestration ---
@@ -98,26 +106,27 @@ for target in "${TARGETS[@]}"; do
     copy_script "$target" "$SCRIPT_RAID_CHECKS" "$TARGET_LOG"
     copy_script "$target" "$SCRIPT_CLEANUP" "$TARGET_LOG"
 
-    # 3️⃣ Run installation remotely (tee as root)
+    # 3️⃣ Run installation remotely (tee as root) with error handling
     log "[${target}] Executing RAID target installer..."
-    ssh -p "$SSH_PORT" "${SSH_USER}@${target}" \
-    "sudo touch /tmp/raid_target_${target}.log && sudo chown root:root /tmp/raid_target_${target}.log && sudo chmod 666 /tmp/raid_target_${target}.log"
+    if ssh -p "$SSH_PORT" "${SSH_USER}@${target}" \
+        "sudo bash /tmp/${SCRIPT_INSTALL_TARGET} | sudo tee -a /tmp/raid_target_${target}.log"; then
+        STATUS=0
+    else
+        STATUS=1
+        log "[${target}] RAID installer failed. Check /tmp/raid_target_${target}.log for details."
+    fi
 
-    ssh -p "$SSH_PORT" "${SSH_USER}@${target}" \
-        "sudo bash -c '/tmp/${SCRIPT_INSTALL_TARGET} | tee -a /tmp/raid_target_${target}.log'"
-
-
-
-    STATUS=$?
     RESULT=$([[ $STATUS -eq 0 ]] && echo "SUCCESS" || echo "FAILURE")
 
     # 4️⃣ Post-cleanup
     log "[${target}] Performing post-cleanup..."
     cleanup_remote "$target"
 
-    # 5️⃣ Capture IP and write summary
+    # 5️⃣ Capture IP and RAID devices
     IP_ADDR=$(ssh -p "$SSH_PORT" "${SSH_USER}@${target}" "hostname -I | awk '{print \$1}'" 2>/dev/null || echo "N/A")
-    printf "%s,%s,%s,%s\n" "$target" "$IP_ADDR" "$RESULT" "$TARGET_LOG" >> "$SUMMARY_FILE"
+    RAID_DEVICES=$(get_raid_devices "$target" || echo "N/A")
+
+    printf "%s,%s,%s,%s,%s\n" "$target" "$IP_ADDR" "$RESULT" "$RAID_DEVICES" "${RAID_DIR}/raid_install_summary.csv" >> "$SUMMARY_FILE"
 
     log "[${target}] Installation ${RESULT}"
 done
