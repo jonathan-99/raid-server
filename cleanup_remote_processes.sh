@@ -42,7 +42,7 @@ for proc in "${PROCESSES_TO_KILL[@]}"; do
         log "[CLEANUP] Killing process: $proc"
         sudo pkill -f "$proc" || warn "Failed to kill $proc (may not exist)"
     else
-        # log "No running process found for: $proc"
+        log "No running process found for: $proc"
     fi
 done
 
