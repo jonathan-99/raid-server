@@ -62,6 +62,20 @@ cleanup_remote() {
     ssh -p "$SSH_PORT" "${SSH_USER}@${target}" "bash -s" < "$SCRIPTS_DIR/$SCRIPT_CLEANUP"
 }
 
+# --- Function to copy a single script ---
+copy_script() {
+    local target="$1"
+    local script="$2"
+    local target_log="$3"
+
+    log "[${target}] Copying ${script} to /tmp..."
+    if scp -P "$SSH_PORT" "$SCRIPTS_DIR/$script" "${SSH_USER}@${target}:/tmp/" >>"$target_log" 2>&1; then
+        log "[${target}] ${script} copied successfully."
+    else
+        error "[${target}] Failed to copy ${script}!"
+    fi
+}
+
 # --- Start orchestration ---
 log "Preparing RAID installation orchestration for ${#TARGETS[@]} targets..."
 
@@ -74,16 +88,13 @@ for target in "${TARGETS[@]}"; do
     log "[${target}] Performing pre-cleanup..."
     cleanup_remote "$target"
 
-    # 2️⃣ Copy required scripts
-    log "[${target}] Copying scripts to /tmp..."
-    scp -P "$SSH_PORT" \
-        "$SCRIPTS_DIR/$SCRIPT_INSTALL_TARGET" \
-        "$SCRIPTS_DIR/$SCRIPT_INSTALL_RAID" \
-        "$SCRIPTS_DIR/$SCRIPT_DEVICE_UPDATER" \
-        "$SCRIPTS_DIR/$SCRIPT_FIREWALL_SETUP" \
-        "$SCRIPTS_DIR/$SCRIPT_RAID_CHECKS" \
-        "$SCRIPTS_DIR/$SCRIPT_CLEANUP" \
-        "${SSH_USER}@${target}:/tmp/" >>"$TARGET_LOG" 2>&1
+    # 2️⃣ Copy required scripts (one at a time)
+    copy_script "$target" "$SCRIPT_INSTALL_TARGET" "$TARGET_LOG"
+    copy_script "$target" "$SCRIPT_INSTALL_RAID" "$TARGET_LOG"
+    copy_script "$target" "$SCRIPT_DEVICE_UPDATER" "$TARGET_LOG"
+    copy_script "$target" "$SCRIPT_FIREWALL_SETUP" "$TARGET_LOG"
+    copy_script "$target" "$SCRIPT_RAID_CHECKS" "$TARGET_LOG"
+    copy_script "$target" "$SCRIPT_CLEANUP" "$TARGET_LOG"
 
     # 3️⃣ Run installation remotely (tee as root)
     log "[${target}] Executing RAID target installer..."
