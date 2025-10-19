@@ -28,7 +28,7 @@ SSH_PORT=22
 LOG_DIR="/home/pinas/raid-server/logs"
 SUMMARY_FILE="${LOG_DIR}/raid_install_summary.csv"
 CLEANUP_SCRIPT="/tmp/cleanup_remote_processes.sh"
-SCRIPTS_DIR="/home/pinas/raid-server/scripts"
+SCRIPTS_DIR="/home/pinas/raid-server"
 
 # --- Script file names (centralized) ---
 SCRIPT_INSTALL_TARGET="install_raid_target.sh"
