@@ -70,7 +70,8 @@ copy_script() {
 
     log "[${target}] Copying ${script} to /tmp..."
     if scp -P "$SSH_PORT" "$SCRIPTS_DIR/$script" "${SSH_USER}@${target}:/tmp/" >>"$target_log" 2>&1; then
-        ssh -p "$SSH_PORT" "${SSH_USER}@${target}" "sudo chmod +x /tmp/${script}"
+        ssh -p "$SSH_PORT" "${SSH_USER}@${target}" "sudo chmod +x /tmp/${script}" \
+            || error "[${target}] Failed to set executable permission on ${script}!"
         log "[${target}] ${script} copied and chmod +x successfully."
     else
         error "[${target}] Failed to copy ${script}!"
