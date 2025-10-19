@@ -4,7 +4,7 @@
 # ------------------------------------------------------------
 # ROLE:
 #   Orchestrates RAID installations across multiple Raspberry Pi targets.
-#   Handles SSH verification, script distribution, and parallel execution.
+#   Handles SSH verification, script distribution, cleanup, and parallel execution.
 #
 # EXECUTION:
 #   ./install_raid_orchestration.sh one two three
@@ -14,6 +14,7 @@
 #   - install_raid_target.sh : Main per-target setup script
 #   - install_raid_server.sh : Actual RAID creation logic
 #   - device_updater.sh, firewall_setup.sh, raid_checks.sh : Helper scripts
+#   - cleanup_remote_processes.sh : Cleanup old processes/temp files
 #
 # OUTPUT:
 #   Logs in ./logs/install_<hostname>.log
@@ -27,15 +28,15 @@ SSH_USER="pi"
 SSH_PORT=22
 LOG_DIR="/home/pinas/raid-server/logs"
 SUMMARY_FILE="${LOG_DIR}/raid_install_summary.csv"
-CLEANUP_SCRIPT="/tmp/cleanup_remote_processes.sh"
 SCRIPTS_DIR="/home/pinas/raid-server"
 
 # --- Script file names (centralized) ---
 SCRIPT_INSTALL_TARGET="install_raid_target.sh"
-SCRIPT_INSTALL_RAID="install-raid-server.sh"
+SCRIPT_INSTALL_RAID="install_raid_server.sh"
 SCRIPT_DEVICE_UPDATER="device_updater.sh"
 SCRIPT_FIREWALL_SETUP="firewall_setup.sh"
 SCRIPT_RAID_CHECKS="raid_checks.sh"
+SCRIPT_CLEANUP="cleanup_remote_processes.sh"
 
 # --- Ensure log directory exists ---
 mkdir -p "$LOG_DIR"
@@ -58,11 +59,9 @@ log "===== RAID INSTALL START: $(date) ====="
 # --- Cleanup function ---
 cleanup_remote() {
     local target="$1"
-    ssh -p "$SSH_PORT" "${SSH_USER}@${target}" "bash -s" <<'EOF'
-        echo "[INFO] Cleaning up old RAID install processes and temp files..."
-        sudo pkill -f "/tmp/install-raid-server.sh|/tmp/install_raid_target.sh|/tmp/device_updater.sh|/tmp/firewall_setup.sh|/tmp/raid_checks.sh" 2>/dev/null || true
-        sudo rm -f /tmp/install-raid-server.sh /tmp/install_raid_target.sh /tmp/device_updater.sh /tmp/firewall_setup.sh /tmp/raid_checks.sh 2>/dev/null || true
-EOF
+    log "[${target}] Running cleanup_remote_processes.sh..."
+    scp -P "$SSH_PORT" "${SCRIPTS_DIR}/${SCRIPT_CLEANUP}" "${SSH_USER}@${target}:/tmp/" >/dev/null 2>&1
+    ssh -p "$SSH_PORT" "${SSH_USER}@${target}" "sudo bash /tmp/${SCRIPT_CLEANUP}"
 }
 
 # --- Start of orchestration ---
@@ -114,6 +113,4 @@ log "===== RAID INSTALL COMPLETE: $(date) ====="
 log "Summary written to: $SUMMARY_FILE"
 echo "----------------------------------------------------------------------------------------------------"
 column -t -s, "$SUMMARY_FILE"
-
-
 printf "========================================\n"
