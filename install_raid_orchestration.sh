@@ -101,7 +101,11 @@ for target in "${TARGETS[@]}"; do
     # 3️⃣ Run installation remotely (tee as root)
     log "[${target}] Executing RAID target installer..."
     ssh -p "$SSH_PORT" "${SSH_USER}@${target}" \
-        "sudo bash /tmp/${SCRIPT_INSTALL_TARGET} | sudo tee -a /tmp/raid_target_${target}.log"
+    "sudo touch /tmp/raid_target_${target}.log && sudo chown root:root /tmp/raid_target_${target}.log && sudo chmod 666 /tmp/raid_target_${target}.log"
+
+    ssh -p "$SSH_PORT" "${SSH_USER}@${target}" \
+        "sudo bash -c '/tmp/${SCRIPT_INSTALL_TARGET} | tee -a /tmp/raid_target_${target}.log'"
+
 
 
     STATUS=$?
