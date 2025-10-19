@@ -68,11 +68,11 @@ copy_script() {
     local script="$2"
     local target_log="$3"
 
-    log "[${target}] Copying ${script} to /tmp..."
+    # log "[${target}] Copying ${script} to /tmp..."
     if scp -P "$SSH_PORT" "$SCRIPTS_DIR/$script" "${SSH_USER}@${target}:/tmp/" >>"$target_log" 2>&1; then
         ssh -p "$SSH_PORT" "${SSH_USER}@${target}" "sudo chmod +x /tmp/${script}" \
             || error "[${target}] Failed to set executable permission on ${script}!"
-        log "[${target}] ${script} copied and chmod +x successfully."
+        # log "[${target}] ${script} copied and chmod +x successfully."
     else
         error "[${target}] Failed to copy ${script}!"
     fi
@@ -101,8 +101,8 @@ for target in "${TARGETS[@]}"; do
     # 3️⃣ Run installation remotely (tee as root)
     log "[${target}] Executing RAID target installer..."
     ssh -p "$SSH_PORT" "${SSH_USER}@${target}" \
-        "sudo bash -c '/tmp/${SCRIPT_INSTALL_TARGET} | tee -a /tmp/raid_target_${target}.log'" \
-        | tee -a "$TARGET_LOG"
+        "sudo bash /tmp/${SCRIPT_INSTALL_TARGET} | sudo tee -a /tmp/raid_target_${target}.log"
+
 
     STATUS=$?
     RESULT=$([[ $STATUS -eq 0 ]] && echo "SUCCESS" || echo "FAILURE")
