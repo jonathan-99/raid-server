@@ -1,134 +1,128 @@
 #!/usr/bin/env bash
-# Multi-target Raspberry Pi RAID orchestrator
-# Only this script needs chmod +x locally. Helpers are copied to target.
+# ============================================================
+# install_raid_orchestration.sh
+# ------------------------------------------------------------
+# ROLE:
+#   Orchestrates RAID installations across multiple Raspberry Pi targets.
+#   Handles SSH verification, script distribution, and parallel execution.
+#
+# EXECUTION:
+#   ./install_raid_orchestration.sh one two three
+#
+# DEPENDENCIES:
+#   - ssh_setup.sh  : Ensures passwordless SSH is configured
+#   - install_raid_target.sh : Main per-target setup script
+#   - install_raid_server.sh : Actual RAID creation logic
+#   - device_updater.sh, firewall_setup.sh, raid_checks.sh : Helper scripts
+#
+# OUTPUT:
+#   Logs in ./logs/install_<hostname>.log
+#   Summary: ./logs/raid_install_summary.csv
+# ============================================================
 
 set -euo pipefail
 
+# --- CONFIGURATION ---
 SSH_USER="pi"
-SSH_PORT="22"
+SSH_PORT=22
 MAX_PARALLEL=3
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_DIR="$SCRIPT_DIR/logs"
+LOG_DIR="${SCRIPT_DIR}/logs"
+SUMMARY_FILE="${LOG_DIR}/raid_install_summary.csv"
+
+# Ensure log directory exists
 mkdir -p "$LOG_DIR"
 
-# Helper scripts to copy to target
-HELPER_SCRIPTS=("ssh_setup.sh" "device_updater.sh" "firewall_setup.sh" "raid_checks.sh" "install-raid-server.sh")
+# --- LOGGING HELPERS ---
+log()   { printf "[INFO]  %s\n" "$*" | tee -a "${LOG_DIR}/orchestration.log"; }
+error() { printf "[ERROR] %s\n" "$*" | tee -a "${LOG_DIR}/orchestration.log" >&2; }
 
-# Color codes
-GREEN="\033[1;32m"
-RED="\033[1;31m"
-YELLOW="\033[1;33m"
-NC="\033[0m"
+# --- CHECK ARGUMENTS ---
+if [[ $# -lt 1 ]]; then
+    echo "Usage: $0 <target1> [target2] ..."
+    exit 1
+fi
+TARGETS=("$@")
 
-log()   { echo -e "[INFO]  $*"; }
-warn()  { echo -e "${YELLOW}[WARN]  $*${NC}" >&2; }
-error() { echo -e "${RED}[ERROR] $*${NC}" >&2; }
+# --- STEP 1: SSH SETUP ---
+log "Running SSH setup verification for all targets..."
+bash "${SCRIPT_DIR}/ssh_setup.sh" "${TARGETS[@]}"
 
-usage() {
-    cat <<EOF
-Usage: $(basename "$0") <TARGET_IP> [TARGET_IP ...] [options]
+# --- STEP 2: COPY AND RUN INSTALL SCRIPTS ON TARGETS ---
+log "Starting RAID installations on ${#TARGETS[@]} devices (max ${MAX_PARALLEL} parallel)..."
 
-Options:
-  --user <user>           SSH username (default: pi)
-  --port <port>           SSH port (default: 22)
-  --max-parallel <n>      Limit concurrent installations (default: 3)
-  --help                  Show this help
-EOF
-}
+# Prepare summary CSV header
+echo "HOSTNAME/IP,STATUS,LOG_FILE" > "$SUMMARY_FILE"
 
-check_ssh() {
-    local ip="$1"
-    ssh -o BatchMode=yes -o ConnectTimeout=5 -p "$SSH_PORT" "${SSH_USER}@${ip}" "echo ok" >/dev/null 2>&1 || \
-        warn "SSH to $ip may require password."
-}
+run_install() {
+    local target="$1"
+    local ip="$target"
+    local target_log="${LOG_DIR}/install_${target}.log"
 
-run_install_on_target() {
-    local ip="$1"
-    local log_file="$LOG_DIR/install_${ip}.log"
+    echo "===== RAID INSTALL START: $(date) =====" > "$target_log"
+    echo "Target: ${target}" >> "$target_log"
 
-    echo "===== RAID INSTALL START: $(date) =====" >"$log_file"
-    echo "Target: $ip" >>"$log_file"
+    log "[${target}] Copying orchestration and helper scripts..."
 
-    log "[${ip}] Copying orchestration and helper scripts..."
-    for script in device_updater.sh firewall_setup.sh raid_checks.sh install-raid-server.sh; do
-        scp -q -P "$SSH_PORT" "$SCRIPT_DIR/$script" "${SSH_USER}@${ip}:/tmp/$script" >>"$log_file" 2>&1
-        ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "${SSH_USER}@${ip}" "chmod +x /tmp/$script" >>"$log_file" 2>&1
+    # --- Copy all required scripts ---
+    for script in \
+        install_raid_target.sh \
+        install_raid_server.sh \
+        device_updater.sh \
+        firewall_setup.sh \
+        raid_checks.sh; do
+
+        if [[ ! -f "${SCRIPT_DIR}/${script}" ]]; then
+            error "[${target}] Missing required file: ${SCRIPT_DIR}/${script}"
+            echo "${target},FAILED,${target_log}" >> "$SUMMARY_FILE"
+            return
+        fi
+
+        scp -q -P "$SSH_PORT" "${SCRIPT_DIR}/${script}" "${SSH_USER}@${ip}:/tmp/${script}" || {
+            error "[${target}] Failed to copy ${script}"
+            echo "${target},FAILED,${target_log}" >> "$SUMMARY_FILE"
+            return
+        }
     done
 
-    log "[${ip}] Running RAID setup..."
-    local target_host
-    target_host=$(ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "${SSH_USER}@${ip}" "hostname" 2>/dev/null || echo "$ip")
-    ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "${SSH_USER}@${ip}" "/tmp/install-raid-server.sh" >>"$log_file" 2>&1
-    local status=$?
+    # --- Set permissions remotely ---
+    ssh -p "$SSH_PORT" "${SSH_USER}@${ip}" "chmod +x /tmp/*.sh" || {
+        error "[${target}] chmod failed on remote host"
+        echo "${target},FAILED,${target_log}" >> "$SUMMARY_FILE"
+        return
+    }
 
-    echo "${target_host},${ip},${status}" >>"$LOG_DIR/raid_install_summary.csv"
+    log "[${target}] Running RAID setup..."
 
-    if [[ $status -eq 0 ]]; then
-        echo -e "${GREEN}[${target_host}] ✅ Installation succeeded${NC}"
+    # --- Run orchestration script on target ---
+    if ssh -p "$SSH_PORT" "${SSH_USER}@${ip}" "sudo bash /tmp/install_raid_target.sh" \
+        > >(tee -a "$target_log") 2>&1; then
+        log "[${target}] Installation completed successfully."
+        echo "${target},SUCCESS,${target_log}" >> "$SUMMARY_FILE"
     else
-        echo -e "${RED}[${target_host}] ❌ Installation failed. See $log_file${NC}"
+        error "[${target}] Installation failed. Check ${target_log}"
+        echo "${target},FAILED,${target_log}" >> "$SUMMARY_FILE"
     fi
 }
 
+export -f run_install log error
+export SCRIPT_DIR SSH_USER SSH_PORT LOG_DIR SUMMARY_FILE
 
-draw_summary_table() {
-    local summary_csv="$LOG_DIR/raid_install_summary.csv"
-    [[ -f "$summary_csv" ]] || { warn "No summary CSV found."; return; }
+# Parallel execution
+printf "%s\n" "${TARGETS[@]}" | xargs -n1 -P "$MAX_PARALLEL" bash -c 'run_install "$@"' _
 
-    echo
-    echo "========= RAID INSTALL SUMMARY ========="
-    printf "%-15s | %-10s | %-30s\n" "HOSTNAME/IP" "STATUS" "LOG FILE"
-    echo "----------------------------------------"
+# --- STEP 3: PRINT SUMMARY ---
+log ""
+log "========= RAID INSTALL SUMMARY ========="
+printf "%-15s | %-10s | %-40s\n" "HOSTNAME/IP" "STATUS" "LOG FILE"
+printf -- "----------------------------------------\n"
 
-    while IFS=, read -r ip status; do
-        if [[ "$status" -eq 0 ]]; then
-            printf "%-15s | ${GREEN}%-10s${NC} | %s\n" "$ip" "SUCCESS" "$LOG_DIR/install_${ip}.log"
-        else
-            printf "%-15s | ${RED}%-10s${NC} | %s\n" "$ip" "FAILED" "$LOG_DIR/install_${ip}.log"
-        fi
-    done <"$summary_csv"
-    echo "========================================"
-}
-
-main() {
-    [[ $# -lt 1 ]] && usage && exit 2
-
-    local targets=()
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --user) SSH_USER="${2:-}"; shift 2 ;;
-            --port) SSH_PORT="${2:-}"; shift 2 ;;
-            --max-parallel) MAX_PARALLEL="${2:-3}"; shift 2 ;;
-            --help|-h) usage; exit 0 ;;
-            *) targets+=("$1"); shift ;;
-        esac
+if [[ -f "$SUMMARY_FILE" ]]; then
+    tail -n +2 "$SUMMARY_FILE" | while IFS=, read -r host status logfile; do
+        printf "%-15s | %-10s | %-40s\n" "$host" "$status" "$logfile"
     done
+else
+    echo "[WARN] Summary file not found."
+fi
 
-    [[ ${#targets[@]} -eq 0 ]] && { error "No target IPs provided."; exit 2; }
-
-    local summary_csv="$LOG_DIR/raid_install_summary.csv"
-    >"$summary_csv"
-
-    log "Running SSH checks..."
-    for ip in "${targets[@]}"; do
-        check_ssh "$ip"
-    done
-
-    log "Starting RAID installations on ${#targets[@]} targets (max $MAX_PARALLEL parallel)..."
-
-    local count=0
-    for ip in "${targets[@]}"; do
-        run_install_on_target "$ip" &
-        ((++count >= MAX_PARALLEL)) && wait -n && ((count--))
-    done
-
-    wait
-    > "$LOG_DIR/raid_install_summary.csv"
-    for tmpfile in "$LOG_DIR"/summary_*.tmp; do
-        [[ -f "$tmpfile" ]] || continue
-        cat "$tmpfile" >>"$LOG_DIR/raid_install_summary.csv"
-    done
-    draw_summary_table
-}
-
-main "$@"
+printf "========================================\n"
