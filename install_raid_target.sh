@@ -2,10 +2,14 @@
 # ============================================
 # install_raid_target.sh
 # --------------------------------------------
-# OLD NAME: install_raid_server.sh
-# NEW NAME: install_raid_target.sh
+# NAME: install_raid_target.sh
 #
-# ROLE: Executes setup steps locally on the target device.
+# ROLE:
+#   Installs RAID 1 on the Raspberry Pi target.
+#   Runs device updater, firewall setup, RAID checks, and RAID creation.
+#
+# EXECUTION:
+#   Called remotely by install_raid_orchestration.sh
 # STEPS:
 #   1. Run device updater
 #   2. Run firewall setup
@@ -17,56 +21,69 @@
 
 set -euo pipefail
 
-# --- Script references (centralized here for maintainability) ---
-DEVICE_UPDATER="/tmp/device_updater.sh"
-FIREWALL_SETUP="/tmp/firewall_setup.sh"
-RAID_CHECKS="/tmp/raid_checks.sh"
-RAID_INSTALLER="/tmp/install_raid_server.sh"
+log()   { printf "[INFO]  %s\n" "$*"; }
+warn()  { printf "[WARN]  %s\n" "$*" >&2; }
+error() { printf "[ERROR] %s\n" "$*" >&2; exit 1; }
 
-# --- Logging setup ---
-TARGET_HOSTNAME="$(hostname)"
-LOG_FILE="/tmp/raid_target_${TARGET_HOSTNAME}.log"
-mkdir -p "$(dirname "$LOG_FILE")"
-
-log()   { printf "[%s] [INFO]  %s\n" "$TARGET_HOSTNAME" "$*" | tee -a "$LOG_FILE"; }
-warn()  { printf "[%s] [WARN]  %s\n" "$TARGET_HOSTNAME" "$*" | tee -a "$LOG_FILE" >&2; }
-error() { printf "[%s] [ERROR] %s\n" "$TARGET_HOSTNAME" "$*" | tee -a "$LOG_FILE" >&2; exit 1; }
-
-trap 'rc=$?; error "Script failed at line $LINENO. Exit code: $rc"; exit $rc' ERR
+RAID_MOUNT="/mnt/raid"
+RAID_DEVICES=("/dev/sda" "/dev/sdc")   # default; can be adjusted
+RAID_NAME="raid1array"
 
 log "===== RAID INSTALL START: $(date) ====="
-log "Target: ${TARGET_HOSTNAME}"
+log "Target: $(hostname)"
 
-# --- Step 1: Device updater ---
-if [[ -x "$DEVICE_UPDATER" ]]; then
-    log "Running device updater..."
-    "$DEVICE_UPDATER" | stdbuf -oL tee -a "$LOG_FILE"
-else
-    warn "device_updater.sh not found or not executable."
+# --- 1️⃣ Device updater ---
+log "Running device updater..."
+sudo apt update -y
+sudo apt upgrade -y
+sudo apt install -y mdadm ufw python3-pip python3-venv
+log "Device updater completed."
+
+# --- 2️⃣ Firewall setup ---
+log "Setting up firewall..."
+sudo ufw allow ssh
+sudo ufw --force enable
+log "Firewall setup completed."
+
+# --- 3️⃣ Pre-installation RAID checks ---
+log "Performing pre-installation RAID checks..."
+AVAILABLE_DISKS=($(lsblk -ndo NAME,TYPE | awk '$2=="disk" {print "/dev/"$1}'))
+log "Available disks: ${AVAILABLE_DISKS[*]}"
+
+if [[ ${#AVAILABLE_DISKS[@]} -lt 2 ]]; then
+    error "Not enough disks for RAID. Require at least 2, found ${#AVAILABLE_DISKS[@]}."
 fi
 
-# --- Step 2: Firewall setup ---
-if [[ -x "$FIREWALL_SETUP" ]]; then
-    log "Setting up firewall..."
-    "$FIREWALL_SETUP" | stdbuf -oL tee -a "$LOG_FILE"
+# Use first two disks as RAID devices
+RAID_DEVICES=("${AVAILABLE_DISKS[0]}" "${AVAILABLE_DISKS[1]}")
+log "RAID devices selected: ${RAID_DEVICES[*]}"
+
+# --- 4️⃣ Check if RAID array exists ---
+if sudo mdadm --detail --scan | grep -q "$RAID_NAME"; then
+    warn "RAID array '$RAID_NAME' already exists. Skipping creation."
 else
-    warn "firewall_setup.sh not found or not executable."
+    # --- 5️⃣ Create RAID 1 array ---
+    log "Creating RAID 1 array on ${RAID_DEVICES[*]}..."
+    if sudo mdadm --create --verbose --level=1 --raid-devices=2 /dev/md0 "${RAID_DEVICES[@]}" 2>&1 | tee /tmp/mdadm_creation.log; then
+        log "RAID 1 array created successfully."
+    else
+        warn "Failed to create RAID 1 array. Devices might be busy or array already exists."
+        log "Check /tmp/mdadm_creation.log for details."
+    fi
 fi
 
-# --- Step 3: RAID checks ---
-if [[ -x "$RAID_CHECKS" ]]; then
-    log "Performing pre-installation RAID checks..."
-    "$RAID_CHECKS" | stdbuf -oL tee -a "$LOG_FILE"
+# --- 6️⃣ Create mount point and mount RAID ---
+sudo mkdir -p "$RAID_MOUNT"
+if mountpoint -q "$RAID_MOUNT"; then
+    log "RAID already mounted at $RAID_MOUNT"
 else
-    warn "raid_checks.sh not found or not executable."
+    log "Mounting RAID at $RAID_MOUNT..."
+    sudo mkfs.ext4 -F /dev/md0 || warn "Filesystem already exists on /dev/md0"
+    sudo mount /dev/md0 "$RAID_MOUNT"
+    log "RAID mounted at $RAID_MOUNT"
 fi
 
-# --- Step 4: RAID installation ---
-if [[ -x "$RAID_INSTALLER" ]]; then
-    log "Running RAID installation..."
-    "$RAID_INSTALLER" | stdbuf -oL tee -a "$LOG_FILE"
-else
-    error "install_raid_server.sh not found or not executable."
-fi
+# --- 7️⃣ Save mdadm config ---
+sudo mdadm --detail --scan | sudo tee -a /etc/mdadm/mdadm.conf
 
-log "RAID setup completed successfully on ${TARGET_HOSTNAME}."
+log "===== RAID INSTALL COMPLETE: $(date) ====="
