@@ -4,17 +4,16 @@
 # ------------------------------------------------------------
 # ROLE:
 #   Orchestrates RAID installations across multiple Raspberry Pi targets.
-#   Handles SSH verification, script distribution, cleanup, and parallel execution.
+#   Handles SSH verification, script distribution, cleanup, and execution.
 #
 # EXECUTION:
 #   ./install_raid_orchestration.sh one two three
 #
 # DEPENDENCIES:
-#   - ssh_setup.sh  : Ensures passwordless SSH is configured
-#   - install_raid_target.sh : Main per-target setup script
-#   - install_raid_server.sh : Actual RAID creation logic
-#   - device_updater.sh, firewall_setup.sh, raid_checks.sh : Helper scripts
-#   - cleanup_remote_processes.sh : Cleanup old processes/temp files
+#   - ssh_setup.sh
+#   - install_raid_target.sh
+#   - install_raid_server.sh
+#   - device_updater.sh, firewall_setup.sh, raid_checks.sh
 #
 # OUTPUT:
 #   Logs in ./logs/install_<hostname>.log
@@ -32,7 +31,7 @@ SCRIPTS_DIR="/home/pinas/raid-server"
 
 # --- Script file names (centralized) ---
 SCRIPT_INSTALL_TARGET="install_raid_target.sh"
-SCRIPT_INSTALL_RAID="install_raid_server.sh"
+SCRIPT_INSTALL_RAID="install-raid-server.sh"
 SCRIPT_DEVICE_UPDATER="device_updater.sh"
 SCRIPT_FIREWALL_SETUP="firewall_setup.sh"
 SCRIPT_RAID_CHECKS="raid_checks.sh"
@@ -55,50 +54,47 @@ fi
 TARGETS=("$@")
 
 log "===== RAID INSTALL START: $(date) ====="
+printf "HOSTNAME,IP,STATUS,LOG FILE\n" > "$SUMMARY_FILE"
 
 # --- Cleanup function ---
 cleanup_remote() {
     local target="$1"
-    log "[${target}] Running cleanup_remote_processes.sh..."
-    scp -P "$SSH_PORT" "${SCRIPTS_DIR}/${SCRIPT_CLEANUP}" "${SSH_USER}@${target}:/tmp/" >/dev/null 2>&1
-    ssh -p "$SSH_PORT" "${SSH_USER}@${target}" "sudo bash /tmp/${SCRIPT_CLEANUP}"
+    ssh -p "$SSH_PORT" "${SSH_USER}@${target}" "bash -s" < "$SCRIPTS_DIR/$SCRIPT_CLEANUP"
 }
 
-# --- Start of orchestration ---
+# --- Start orchestration ---
 log "Preparing RAID installation orchestration for ${#TARGETS[@]} targets..."
-printf "HOSTNAME,IP,STATUS,LOG FILE\n" > "$SUMMARY_FILE"
 
 for target in "${TARGETS[@]}"; do
     TARGET_LOG="${LOG_DIR}/install_${target}.log"
     echo "--------------------------------------------------------------------------------" | tee -a "$TARGET_LOG"
     log "Processing target: ${target}"
 
-    # 1️⃣ Initial cleanup
+    # 1️⃣ Pre-cleanup
     log "[${target}] Performing pre-cleanup..."
     cleanup_remote "$target"
 
     # 2️⃣ Copy required scripts
     log "[${target}] Copying scripts to /tmp..."
     scp -P "$SSH_PORT" \
-        "${SCRIPTS_DIR}/${SCRIPT_INSTALL_TARGET}" \
-        "${SCRIPTS_DIR}/${SCRIPT_INSTALL_RAID}" \
-        "${SCRIPTS_DIR}/${SCRIPT_DEVICE_UPDATER}" \
-        "${SCRIPTS_DIR}/${SCRIPT_FIREWALL_SETUP}" \
-        "${SCRIPTS_DIR}/${SCRIPT_RAID_CHECKS}" \
+        "$SCRIPTS_DIR/$SCRIPT_INSTALL_TARGET" \
+        "$SCRIPTS_DIR/$SCRIPT_INSTALL_RAID" \
+        "$SCRIPTS_DIR/$SCRIPT_DEVICE_UPDATER" \
+        "$SCRIPTS_DIR/$SCRIPT_FIREWALL_SETUP" \
+        "$SCRIPTS_DIR/$SCRIPT_RAID_CHECKS" \
+        "$SCRIPTS_DIR/$SCRIPT_CLEANUP" \
         "${SSH_USER}@${target}:/tmp/" >>"$TARGET_LOG" 2>&1
 
-    # 3️⃣ Run installation remotely
+    # 3️⃣ Run installation remotely (tee as root)
     log "[${target}] Executing RAID target installer..."
-    ssh -p "$SSH_PORT" "${SSH_USER}@${target}" "sudo bash /tmp/${SCRIPT_INSTALL_TARGET}" | tee -a "$TARGET_LOG"
+    ssh -p "$SSH_PORT" "${SSH_USER}@${target}" \
+        "sudo bash -c '/tmp/${SCRIPT_INSTALL_TARGET} | tee -a /tmp/raid_target_${target}.log'" \
+        | tee -a "$TARGET_LOG"
 
     STATUS=$?
-    if [[ $STATUS -eq 0 ]]; then
-        RESULT="SUCCESS"
-    else
-        RESULT="FAILURE"
-    fi
+    RESULT=$([[ $STATUS -eq 0 ]] && echo "SUCCESS" || echo "FAILURE")
 
-    # 4️⃣ Final cleanup
+    # 4️⃣ Post-cleanup
     log "[${target}] Performing post-cleanup..."
     cleanup_remote "$target"
 
