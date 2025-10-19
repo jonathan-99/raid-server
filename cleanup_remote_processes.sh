@@ -1,38 +1,67 @@
 #!/usr/bin/env bash
+# ============================================================
 # cleanup_remote_processes.sh
-# Stops any recursive RAID install processes and removes temporary files.
+# ------------------------------------------------------------
+# ROLE:
+#   Cleans up leftover RAID orchestration processes and temporary scripts.
+#   Designed to be executed remotely via SSH or locally on the target.
+#
+# DEPENDENCIES:
+#   None (uses standard Bash and sudo)
+#
+# LOGGING:
+#   Outputs to stdout/stderr for orchestration script capture
+# ============================================================
 
 set -euo pipefail
 
-SSH_USER="pi"
-SSH_PORT=22
-TARGETS=("$@")
+TARGET_HOSTNAME="$(hostname)"
+LOG_FILE="/tmp/cleanup_remote_${TARGET_HOSTNAME}.log"
 
-if [[ $# -lt 1 ]]; then
-    echo "Usage: $0 <target1> [target2 ...]"
-    exit 1
-fi
+# --- Logging functions ---
+log()   { printf "[%s] [INFO]  %s\n" "$TARGET_HOSTNAME" "$*"; }
+warn()  { printf "[%s] [WARN]  %s\n" "$TARGET_HOSTNAME" "$*" >&2; }
+error() { printf "[%s] [ERROR] %s\n" "$TARGET_HOSTNAME" "$*" >&2; exit 1; }
 
-echo "[INFO] Cleaning up RAID install processes and temp files on ${#TARGETS[@]} target(s)..."
+trap 'rc=$?; error "Script failed at line $LINENO. Exit code: $rc"; exit $rc' ERR
 
-for target in "${TARGETS[@]}"; do
-    echo "[${target}] Cleaning up..."
-    ssh -p "$SSH_PORT" "${SSH_USER}@${target}" '
-        echo "[INFO] Killing any active RAID install-related processes..."
-        sudo pkill -f "/tmp/install-raid-server.sh|/tmp/install_raid_target.sh|/tmp/device_updater.sh|/tmp/firewall_setup.sh|/tmp/raid_checks.sh" 2>/dev/null || true
+log " [cleanup] Starting cleanup of old RAID processes and temp files..."
 
-        echo "[INFO] Removing temporary installer files..."
-        sudo rm -f /tmp/install-raid-server.sh /tmp/install_raid_target.sh /tmp/device_updater.sh /tmp/firewall_setup.sh /tmp/raid_checks.sh 2>/dev/null || true
+# --- Step 1: Kill leftover RAID orchestration processes ---
+# Processes to target:
+PROCESSES_TO_KILL=(
+    "/tmp/install-raid-server.sh"
+    "/tmp/install_raid_target.sh"
+    "/tmp/device_updater.sh"
+    "/tmp/firewall_setup.sh"
+    "/tmp/raid_checks.sh"
+)
 
-        echo "[INFO] Verifying cleanup..."
-        REMAINING=$(sudo ls /tmp | grep -E "install|raid|device|firewall" || true)
-        if [[ -z "$REMAINING" ]]; then
-            echo "[SUCCESS] No temporary RAID files remain."
-        else
-            echo "[WARN] Some temp files remain:"
-            echo "$REMAINING"
-        fi
-    '
+for proc in "${PROCESSES_TO_KILL[@]}"; do
+    if pgrep -f "$proc" >/dev/null 2>&1; then
+        log "[cleanup] Killing process: $proc"
+        sudo pkill -f "$proc" || warn "Failed to kill $proc (may not exist)"
+    else
+        log "No running process found for: $proc"
+    fi
 done
 
-echo "[INFO] Remote cleanup completed on all targets."
+# --- Step 2: Remove temporary scripts ---
+TMP_FILES=(
+    "/tmp/install-raid-server.sh"
+    "/tmp/install_raid_target.sh"
+    "/tmp/device_updater.sh"
+    "/tmp/firewall_setup.sh"
+    "/tmp/raid_checks.sh"
+)
+
+for file in "${TMP_FILES[@]}"; do
+    if [[ -f "$file" ]]; then
+        log " [cleanup] Removing temporary file: $file"
+        sudo rm -f "$file" || warn "Failed to remove $file"
+    else
+        log "[cleanup]  No temporary file found: $file"
+    fi
+done
+
+log " [cleanup] Cleanup completed successfully on ${TARGET_HOSTNAME}."
