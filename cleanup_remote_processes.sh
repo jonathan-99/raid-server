@@ -13,7 +13,7 @@
 #   Outputs to stdout/stderr for orchestration script capture
 # ============================================================
 
-set -euo pipefail
+set -uo pipefail  # remove 'e' to avoid exit on minor issues
 
 TARGET_HOSTNAME="$(hostname)"
 LOG_FILE="/tmp/cleanup_remote_${TARGET_HOSTNAME}.log"
@@ -21,20 +21,18 @@ LOG_FILE="/tmp/cleanup_remote_${TARGET_HOSTNAME}.log"
 # --- Logging functions ---
 log()   { printf "[%s] [INFO]  %s\n" "$TARGET_HOSTNAME" "$*"; }
 warn()  { printf "[%s] [WARN]  %s\n" "$TARGET_HOSTNAME" "$*" >&2; }
-error() { printf "[%s] [ERROR] %s\n" "$TARGET_HOSTNAME" "$*" >&2; exit 1; }
 
-trap 'rc=$?; error "Script failed at line $LINENO. Exit code: $rc"; exit $rc' ERR
-
-log " [cleanup] Starting cleanup of old RAID processes and temp files..."
+log "[cleanup] Starting cleanup of old RAID processes and temp files..."
 
 # --- Step 1: Kill leftover RAID orchestration processes ---
-# Processes to target:
 PROCESSES_TO_KILL=(
     "/tmp/install_raid_server.sh"
     "/tmp/install_raid_target.sh"
     "/tmp/device_updater.sh"
     "/tmp/firewall_setup.sh"
     "/tmp/raid_checks.sh"
+    "/tmp/cleanup_remote_processes.sh"
+    "/tmp/install_raid_orchestration.sh"
 )
 
 for proc in "${PROCESSES_TO_KILL[@]}"; do
@@ -48,21 +46,26 @@ done
 
 # --- Step 2: Remove temporary scripts ---
 TMP_FILES=(
-    "/tmp/install-raid-server.sh"
+    "/tmp/install_raid_server.sh"
     "/tmp/install_raid_target.sh"
     "/tmp/device_updater.sh"
     "/tmp/firewall_setup.sh"
     "/tmp/raid_checks.sh"
+    "/tmp/cleanup_remote_processes.sh"
+    "/tmp/install_raid_orchestration.sh"
+    "/tmp/ssh_setup"
+    "/tmp/test_script"
+    "/tmp/raid_installer.sh"
+    "/tmp/raid_server_manager.sh"
 )
 
 for file in "${TMP_FILES[@]}"; do
     if [[ -f "$file" ]]; then
-        # log " [cleanup] Removing temporary file: $file"
-        sudo rm -f "$file" || warn "Failed to remove $file"
+        sudo rm -f "$file" && log "[CLEANUP] Removed temporary file: $file" \
+            || warn "Failed to remove $file"
     else
-        log "[cleanup]  No temporary file found: $file"
+        log "[cleanup] No temporary file found: $file"
     fi
-log "[CLEANUP] Removed temporary file: $file"
 done
 
-log " [cleanup] Cleanup completed successfully on ${TARGET_HOSTNAME}."
+log "[cleanup] Cleanup completed successfully on ${TARGET_HOSTNAME}."
