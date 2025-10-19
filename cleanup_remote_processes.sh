@@ -62,7 +62,7 @@ for file in "${TMP_FILES[@]}"; do
     else
         log "[cleanup]  No temporary file found: $file"
     fi
-log "[CLEANUP] Removed temporary files"
+log "[CLEANUP] Removed temporary file: $file"
 done
 
 log " [cleanup] Cleanup completed successfully on ${TARGET_HOSTNAME}."
