@@ -22,107 +22,98 @@
 
 set -euo pipefail
 
-# --- CONFIGURATION ---
+# --- Configuration ---
 SSH_USER="pi"
 SSH_PORT=22
-MAX_PARALLEL=3
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_DIR="${SCRIPT_DIR}/logs"
+LOG_DIR="/home/pinas/raid-server/logs"
 SUMMARY_FILE="${LOG_DIR}/raid_install_summary.csv"
+CLEANUP_SCRIPT="/tmp/cleanup_remote_processes.sh"
+SCRIPTS_DIR="/home/pinas/raid-server/scripts"
 
-# Ensure log directory exists
+# --- Script file names (centralized) ---
+SCRIPT_INSTALL_TARGET="install_raid_target.sh"
+SCRIPT_INSTALL_RAID="install-raid-server.sh"
+SCRIPT_DEVICE_UPDATER="device_updater.sh"
+SCRIPT_FIREWALL_SETUP="firewall_setup.sh"
+SCRIPT_RAID_CHECKS="raid_checks.sh"
+
+# --- Ensure log directory exists ---
 mkdir -p "$LOG_DIR"
 
-# --- LOGGING HELPERS ---
-log()   { printf "[INFO]  %s\n" "$*" | tee -a "${LOG_DIR}/orchestration.log"; }
-error() { printf "[ERROR] %s\n" "$*" | tee -a "${LOG_DIR}/orchestration.log" >&2; }
+# --- Helper functions ---
+log()   { printf "[INFO]  %s\n" "$*"; }
+warn()  { printf "[WARN]  %s\n" "$*" >&2; }
+error() { printf "[ERROR] %s\n" "$*" >&2; exit 1; }
 
-# --- CHECK ARGUMENTS ---
+trap 'rc=$?; error "Script failed at line $LINENO. Exit code: $rc"; exit $rc' ERR
+
+# --- Arguments check ---
 if [[ $# -lt 1 ]]; then
-    echo "Usage: $0 <target1> [target2] ..."
-    exit 1
+    error "Usage: $0 <target1> [target2 ...]"
 fi
 TARGETS=("$@")
 
-# --- STEP 1: SSH SETUP ---
-log "Running SSH setup verification for all targets..."
-bash "${SCRIPT_DIR}/ssh_setup.sh" "${TARGETS[@]}"
+log "===== RAID INSTALL START: $(date) ====="
 
-# --- STEP 2: COPY AND RUN INSTALL SCRIPTS ON TARGETS ---
-log "Starting RAID installations on ${#TARGETS[@]} devices (max ${MAX_PARALLEL} parallel)..."
-
-# Prepare summary CSV header
-echo "HOSTNAME/IP,STATUS,LOG_FILE" > "$SUMMARY_FILE"
-
-run_install() {
+# --- Cleanup function ---
+cleanup_remote() {
     local target="$1"
-    local ip="$target"
-    local target_log="${LOG_DIR}/install_${target}.log"
-
-    echo "===== RAID INSTALL START: $(date) =====" > "$target_log"
-    echo "Target: ${target}" >> "$target_log"
-
-    log "[${target}] Copying orchestration and helper scripts..."
-
-    # --- Copy all required scripts ---
-    for script in \
-        install_raid_target.sh \
-        install_raid_server.sh \
-        device_updater.sh \
-        firewall_setup.sh \
-        raid_checks.sh; do
-
-        if [[ ! -f "${SCRIPT_DIR}/${script}" ]]; then
-            error "[${target}] Missing required file: ${SCRIPT_DIR}/${script}"
-            echo "${target},FAILED,${target_log}" >> "$SUMMARY_FILE"
-            return
-        fi
-
-        scp -q -P "$SSH_PORT" "${SCRIPT_DIR}/${script}" "${SSH_USER}@${ip}:/tmp/${script}" || {
-            error "[${target}] Failed to copy ${script}"
-            echo "${target},FAILED,${target_log}" >> "$SUMMARY_FILE"
-            return
-        }
-    done
-
-    # --- Set permissions remotely ---
-    ssh -p "$SSH_PORT" "${SSH_USER}@${ip}" "chmod +x /tmp/*.sh" || {
-        error "[${target}] chmod failed on remote host"
-        echo "${target},FAILED,${target_log}" >> "$SUMMARY_FILE"
-        return
-    }
-
-    log "[${target}] Running RAID setup..."
-
-    # --- Run orchestration script on target ---
-    if ssh -p "$SSH_PORT" "${SSH_USER}@${ip}" "sudo bash /tmp/install_raid_target.sh" \
-        > >(tee -a "$target_log") 2>&1; then
-        log "[${target}] Installation completed successfully."
-        echo "${target},SUCCESS,${target_log}" >> "$SUMMARY_FILE"
-    else
-        error "[${target}] Installation failed. Check ${target_log}"
-        echo "${target},FAILED,${target_log}" >> "$SUMMARY_FILE"
-    fi
+    ssh -p "$SSH_PORT" "${SSH_USER}@${target}" "bash -s" <<'EOF'
+        echo "[INFO] Cleaning up old RAID install processes and temp files..."
+        sudo pkill -f "/tmp/install-raid-server.sh|/tmp/install_raid_target.sh|/tmp/device_updater.sh|/tmp/firewall_setup.sh|/tmp/raid_checks.sh" 2>/dev/null || true
+        sudo rm -f /tmp/install-raid-server.sh /tmp/install_raid_target.sh /tmp/device_updater.sh /tmp/firewall_setup.sh /tmp/raid_checks.sh 2>/dev/null || true
+EOF
 }
 
-export -f run_install log error
-export SCRIPT_DIR SSH_USER SSH_PORT LOG_DIR SUMMARY_FILE
+# --- Start of orchestration ---
+log "Preparing RAID installation orchestration for ${#TARGETS[@]} targets..."
+printf "HOSTNAME,IP,STATUS,LOG FILE\n" > "$SUMMARY_FILE"
 
-# Parallel execution
-printf "%s\n" "${TARGETS[@]}" | xargs -n1 -P "$MAX_PARALLEL" bash -c 'run_install "$@"' _
+for target in "${TARGETS[@]}"; do
+    TARGET_LOG="${LOG_DIR}/install_${target}.log"
+    echo "--------------------------------------------------------------------------------" | tee -a "$TARGET_LOG"
+    log "Processing target: ${target}"
 
-# --- STEP 3: PRINT SUMMARY ---
-log ""
-log "========= RAID INSTALL SUMMARY ========="
-printf "%-15s | %-10s | %-40s\n" "HOSTNAME/IP" "STATUS" "LOG FILE"
-printf -- "----------------------------------------\n"
+    # 1️⃣ Initial cleanup
+    log "[${target}] Performing pre-cleanup..."
+    cleanup_remote "$target"
 
-if [[ -f "$SUMMARY_FILE" ]]; then
-    tail -n +2 "$SUMMARY_FILE" | while IFS=, read -r host status logfile; do
-        printf "%-15s | %-10s | %-40s\n" "$host" "$status" "$logfile"
-    done
-else
-    echo "[WARN] Summary file not found."
-fi
+    # 2️⃣ Copy required scripts
+    log "[${target}] Copying scripts to /tmp..."
+    scp -P "$SSH_PORT" \
+        "${SCRIPTS_DIR}/${SCRIPT_INSTALL_TARGET}" \
+        "${SCRIPTS_DIR}/${SCRIPT_INSTALL_RAID}" \
+        "${SCRIPTS_DIR}/${SCRIPT_DEVICE_UPDATER}" \
+        "${SCRIPTS_DIR}/${SCRIPT_FIREWALL_SETUP}" \
+        "${SCRIPTS_DIR}/${SCRIPT_RAID_CHECKS}" \
+        "${SSH_USER}@${target}:/tmp/" >>"$TARGET_LOG" 2>&1
+
+    # 3️⃣ Run installation remotely
+    log "[${target}] Executing RAID target installer..."
+    ssh -p "$SSH_PORT" "${SSH_USER}@${target}" "sudo bash /tmp/${SCRIPT_INSTALL_TARGET}" | tee -a "$TARGET_LOG"
+
+    STATUS=$?
+    if [[ $STATUS -eq 0 ]]; then
+        RESULT="SUCCESS"
+    else
+        RESULT="FAILURE"
+    fi
+
+    # 4️⃣ Final cleanup
+    log "[${target}] Performing post-cleanup..."
+    cleanup_remote "$target"
+
+    # 5️⃣ Capture IP and write summary
+    IP_ADDR=$(ssh -p "$SSH_PORT" "${SSH_USER}@${target}" "hostname -I | awk '{print \$1}'" 2>/dev/null || echo "N/A")
+    printf "%s,%s,%s,%s\n" "$target" "$IP_ADDR" "$RESULT" "$TARGET_LOG" >> "$SUMMARY_FILE"
+
+    log "[${target}] Installation ${RESULT}"
+done
+
+log "===== RAID INSTALL COMPLETE: $(date) ====="
+log "Summary written to: $SUMMARY_FILE"
+echo "----------------------------------------------------------------------------------------------------"
+column -t -s, "$SUMMARY_FILE"
+
 
 printf "========================================\n"
