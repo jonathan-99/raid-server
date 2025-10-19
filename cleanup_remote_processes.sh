@@ -30,7 +30,7 @@ log " [cleanup] Starting cleanup of old RAID processes and temp files..."
 # --- Step 1: Kill leftover RAID orchestration processes ---
 # Processes to target:
 PROCESSES_TO_KILL=(
-    "/tmp/install-raid-server.sh"
+    "/tmp/install_raid_server.sh"
     "/tmp/install_raid_target.sh"
     "/tmp/device_updater.sh"
     "/tmp/firewall_setup.sh"
@@ -39,10 +39,10 @@ PROCESSES_TO_KILL=(
 
 for proc in "${PROCESSES_TO_KILL[@]}"; do
     if pgrep -f "$proc" >/dev/null 2>&1; then
-        log "[cleanup] Killing process: $proc"
+        log "[CLEANUP] Killing process: $proc"
         sudo pkill -f "$proc" || warn "Failed to kill $proc (may not exist)"
     else
-        log "No running process found for: $proc"
+        # log "No running process found for: $proc"
     fi
 done
 
@@ -57,11 +57,12 @@ TMP_FILES=(
 
 for file in "${TMP_FILES[@]}"; do
     if [[ -f "$file" ]]; then
-        log " [cleanup] Removing temporary file: $file"
+        # log " [cleanup] Removing temporary file: $file"
         sudo rm -f "$file" || warn "Failed to remove $file"
     else
         log "[cleanup]  No temporary file found: $file"
     fi
+log "[CLEANUP] Removed temporary files"
 done
 
 log " [cleanup] Cleanup completed successfully on ${TARGET_HOSTNAME}."
