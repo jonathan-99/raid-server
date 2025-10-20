@@ -33,6 +33,10 @@ PROCESSES_TO_KILL=(
     "/tmp/raid_checks.sh"
     "/tmp/cleanup_remote_processes.sh"
     "/tmp/install_raid_orchestration.sh"
+    "/tmp/test_script.sh"
+    "/tmp/ssh_setup.sh"
+    "/tmp/mdadm_creation.log"    
+    "/tmp/raid_target_one.log"
 )
 
 for proc in "${PROCESSES_TO_KILL[@]}"; do
