@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ============================================================
+# ssh_setup.sh
+# ------------------------------------------------------------
+# ROLE:
+#   Sets up passwordless SSH to multiple targets for RAID orchestration.
+#   Logs all steps with host-specific info.
+#
+# USAGE:
+#   ./ssh_setup.sh <host1> [host2 ...]
+# ============================================================
+
 # --- Config ---
 LOG_DIR="$(dirname "$0")/logs"
 mkdir -p "$LOG_DIR"
@@ -9,12 +20,12 @@ LOG_FILE="$LOG_DIR/ssh_setup_$(date +%Y%m%d_%H%M%S).log"
 SSH_KEY="$HOME/.ssh/id_ed25519"
 SSH_USER="pi"
 
-# --- Logging functions ---
-info()  { echo -e "[INFO]  $*" | tee -a "$LOG_FILE"; }
-warn()  { echo -e "\033[1;33m[WARN]  $*\033[0m" | tee -a "$LOG_FILE" >&2; }
-error() { echo -e "\033[1;31m[ERROR] $*\033[0m" | tee -a "$LOG_FILE" >&2; exit 1; }
+# --- Logging functions with host info ---
+info()  { echo -e "[INFO] [$HOST]  $*" | tee -a "$LOG_FILE"; }
+warn()  { echo -e "\033[1;33m[WARN] [$HOST]  $*\033[0m" | tee -a "$LOG_FILE" >&2; }
+error() { echo -e "\033[1;31m[ERROR] [$HOST] $*\033[0m" | tee -a "$LOG_FILE" >&2; exit 1; }
 
-# --- Usage ---
+# --- Usage check ---
 if [[ $# -lt 1 ]]; then
   echo "Usage: $0 <host1> [host2 ...]"
   exit 1
@@ -22,9 +33,11 @@ fi
 
 # --- Step 1: Ensure SSH key exists ---
 if [[ ! -f "$SSH_KEY" ]]; then
+  HOST="LOCAL"
   info "No SSH key found at $SSH_KEY — generating one..."
   ssh-keygen -t ed25519 -f "$SSH_KEY" -N "" -C "raid-orchestrator" | tee -a "$LOG_FILE"
 else
+  HOST="LOCAL"
   info "SSH key already exists at $SSH_KEY"
 fi
 
@@ -33,6 +46,7 @@ SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o Connect
 
 # --- Step 3: Iterate through hosts ---
 for host in "$@"; do
+  HOST="$host"
   info "Setting up SSH access for host: $host"
 
   {
@@ -53,4 +67,5 @@ for host in "$@"; do
   } | stdbuf -oL tee -a "$LOG_FILE"
 done
 
-info "SSH setup completed. Log saved to: $LOG_FILE"
+HOST="LOCAL"
+info "SSH setup completed for all hosts. Log saved to: $LOG_FILE"
