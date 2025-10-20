@@ -32,7 +32,7 @@ SCRIPTS_DIR="${RAID_DIR}"
 
 # --- Script names ---
 SCRIPT_INSTALL_TARGET="install_raid_target.sh"
-SCRIPT_INSTALL_RAID="install-raid-server.sh"
+SCRIPT_INSTALL_RAID="install_raid_server.sh"
 SCRIPT_DEVICE_UPDATER="device_updater.sh"
 SCRIPT_FIREWALL_SETUP="firewall_setup.sh"
 SCRIPT_RAID_CHECKS="raid_checks.sh"
