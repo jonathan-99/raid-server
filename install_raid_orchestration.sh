@@ -16,8 +16,8 @@
 #   - device_updater.sh, firewall_setup.sh, raid_checks.sh
 #
 # OUTPUT:
-#   Logs in ./logs/install_<hostname>.log
-#   Summary: <RAID_FOLDER>/raid_install_summary.csv
+#   Logs:   ./logs/install_<hostname>.log
+#   Summary: <RAID_DIR>/raid_install_summary.csv
 # ============================================================
 
 set -euo pipefail
@@ -30,9 +30,9 @@ LOG_DIR="${RAID_DIR}/logs"
 SUMMARY_FILE="${RAID_DIR}/raid_install_summary.csv"
 SCRIPTS_DIR="${RAID_DIR}"
 
-# --- Script file names (centralized) ---
+# --- Script names ---
 SCRIPT_INSTALL_TARGET="install_raid_target.sh"
-SCRIPT_INSTALL_RAID="install_raid_server.sh"
+SCRIPT_INSTALL_RAID="install-raid-server.sh"
 SCRIPT_DEVICE_UPDATER="device_updater.sh"
 SCRIPT_FIREWALL_SETUP="firewall_setup.sh"
 SCRIPT_RAID_CHECKS="raid_checks.sh"
@@ -48,22 +48,22 @@ error() { printf "[ERROR] %s\n" "$*" >&2; exit 1; }
 
 trap 'rc=$?; error "Script failed at line $LINENO. Exit code: $rc"; exit $rc' ERR
 
-# --- Arguments check ---
+# --- Check arguments ---
 if [[ $# -lt 1 ]]; then
     error "Usage: $0 <target1> [target2 ...]"
 fi
 TARGETS=("$@")
 
-log "===== RAID INSTALL START: $(date) ====="
-printf "HOSTNAME,IP,STATUS,RAID_DEVICES,LOG FILE\n" > "$SUMMARY_FILE"
-
-# --- Cleanup function ---
-cleanup_remote() {
-    local target="$1"
-    ssh -p "$SSH_PORT" "${SSH_USER}@${target}" "bash -s" < "$SCRIPTS_DIR/$SCRIPT_CLEANUP"
+# --- Utilities ---
+get_host_ip() {
+    ssh -p "$SSH_PORT" "${SSH_USER}@${1}" "hostname -I | awk '{print \$1}'" 2>/dev/null || echo "N/A"
 }
 
-# --- Function to copy a single script ---
+cleanup_remote() {
+    local target="$1"
+    ssh -p "$SSH_PORT" "${SSH_USER}@${target}" "bash -s" < "$SCRIPTS_DIR/$SCRIPT_CLEANUP" >/dev/null 2>&1 || true
+}
+
 copy_script() {
     local target="$1"
     local script="$2"
@@ -71,22 +71,22 @@ copy_script() {
 
     log "[${target}] Copying ${script} to /tmp..."
     if scp -P "$SSH_PORT" "$SCRIPTS_DIR/$script" "${SSH_USER}@${target}:/tmp/" >>"$target_log" 2>&1; then
-        ssh -p "$SSH_PORT" "${SSH_USER}@${target}" "sudo chmod +x /tmp/${script}" \
-            || error "[${target}] Failed to set executable permission on ${script}!"
-        log "[${target}] ${script} copied and chmod +x successfully."
+        ssh -p "$SSH_PORT" "${SSH_USER}@${target}" "sudo chmod +x /tmp/${script}" >>"$target_log" 2>&1
+        log "[${target}] ${script} copied successfully."
     else
         error "[${target}] Failed to copy ${script}!"
     fi
 }
 
-# --- Function to get RAID candidate devices ---
 get_raid_devices() {
     local target="$1"
     ssh -p "$SSH_PORT" "${SSH_USER}@${target}" \
-        "lsblk -ndo NAME,TYPE | awk '\$2==\"disk\" {print \"/dev/\"\$1}' | head -n 2 | tr '\n' ',' | sed 's/,\$//'"
+        "lsblk -ndo NAME,TYPE | awk '\$2==\"disk\" {print \"/dev/\"\$1}' | head -n 2 | tr '\n' ' '" 2>/dev/null || echo "N/A"
 }
 
 # --- Start orchestration ---
+log "===== RAID INSTALL START: $(date) ====="
+echo "HOSTNAME,IP,STATUS,RAID_DEVICES,MOUNT_POINT" > "$SUMMARY_FILE"
 log "Preparing RAID installation orchestration for ${#TARGETS[@]} targets..."
 
 for target in "${TARGETS[@]}"; do
@@ -98,41 +98,38 @@ for target in "${TARGETS[@]}"; do
     log "[${target}] Performing pre-cleanup..."
     cleanup_remote "$target"
 
-    # 2️⃣ Copy required scripts (one at a time)
-    copy_script "$target" "$SCRIPT_INSTALL_TARGET" "$TARGET_LOG"
-    copy_script "$target" "$SCRIPT_INSTALL_RAID" "$TARGET_LOG"
-    copy_script "$target" "$SCRIPT_DEVICE_UPDATER" "$TARGET_LOG"
-    copy_script "$target" "$SCRIPT_FIREWALL_SETUP" "$TARGET_LOG"
-    copy_script "$target" "$SCRIPT_RAID_CHECKS" "$TARGET_LOG"
-    copy_script "$target" "$SCRIPT_CLEANUP" "$TARGET_LOG"
+    # 2️⃣ Copy all scripts
+    for script in \
+        "$SCRIPT_INSTALL_TARGET" "$SCRIPT_INSTALL_RAID" "$SCRIPT_DEVICE_UPDATER" \
+        "$SCRIPT_FIREWALL_SETUP" "$SCRIPT_RAID_CHECKS" "$SCRIPT_CLEANUP"; do
+        copy_script "$target" "$script" "$TARGET_LOG"
+    done
 
-    # 3️⃣ Run installation remotely (tee as root) with error handling
+    # 3️⃣ Run remote installer
     log "[${target}] Executing RAID target installer..."
     if ssh -p "$SSH_PORT" "${SSH_USER}@${target}" \
         "sudo bash /tmp/${SCRIPT_INSTALL_TARGET} | sudo tee -a /tmp/raid_target_${target}.log"; then
-        STATUS=0
+        STATUS="SUCCESS"
     else
-        STATUS=1
-        log "[${target}] RAID installer failed. Check /tmp/raid_target_${target}.log for details."
+        STATUS="FAILURE"
     fi
 
-    RESULT=$([[ $STATUS -eq 0 ]] && echo "SUCCESS" || echo "FAILURE")
-
     # 4️⃣ Post-cleanup
-    log "[${target}] Performing post-cleanup..."
     cleanup_remote "$target"
 
-    # 5️⃣ Capture IP and RAID devices
-    IP_ADDR=$(ssh -p "$SSH_PORT" "${SSH_USER}@${target}" "hostname -I | awk '{print \$1}'" 2>/dev/null || echo "N/A")
-    RAID_DEVICES=$(get_raid_devices "$target" || echo "N/A")
+    # 5️⃣ Gather details for summary
+    IP_ADDR=$(get_host_ip "$target")
+    RAID_DEVICES=$(get_raid_devices "$target")
+    MOUNT_POINT=$(ssh -p "$SSH_PORT" "${SSH_USER}@${target}" \
+        "grep -m1 'Mounting RAID at' /tmp/raid_target_${target}.log | awk '{print \$NF}'" 2>/dev/null)
+    [[ -z "$MOUNT_POINT" ]] && MOUNT_POINT="/mnt/raid"
 
-    printf "%s,%s,%s,%s,%s\n" "$target" "$IP_ADDR" "$RESULT" "$RAID_DEVICES" "${RAID_DIR}/raid_install_summary.csv" >> "$SUMMARY_FILE"
-
-    log "[${target}] Installation ${RESULT}"
+    printf "%s,%s,%s,%s,%s\n" "$target" "$IP_ADDR" "$STATUS" "$RAID_DEVICES" "$MOUNT_POINT" >> "$SUMMARY_FILE"
+    log "[${target}] Installation ${STATUS}"
 done
 
 log "===== RAID INSTALL COMPLETE: $(date) ====="
 log "Summary written to: $SUMMARY_FILE"
 echo "----------------------------------------------------------------------------------------------------"
 column -t -s, "$SUMMARY_FILE"
-printf "========================================\n"
+echo "===================================================================================================="
