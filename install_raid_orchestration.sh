@@ -18,6 +18,20 @@
 #   Logs:   ./logs/install_<hostname>.log
 #   Summary: <RAID_DIR>/raid_install_summary.csv
 # ============================================================
+#!/usr/bin/env bash
+# ============================================================
+# install_raid_orchestration.sh
+# ------------------------------------------------------------
+# ROLE:
+#   Orchestrates RAID installations across multiple Raspberry Pi targets.
+#   Handles SSH setup, script distribution, cleanup, execution, and summary.
+#
+# EXECUTION:
+#   ./install_raid_orchestration.sh <target1> [target2 ...]
+#
+# DEPENDENCIES:
+#   - ssh_setup.sh
+# ============================================================
 
 set -euo pipefail
 
@@ -36,6 +50,7 @@ SCRIPT_DEVICE_UPDATER="device_updater.sh"
 SCRIPT_FIREWALL_SETUP="firewall_setup.sh"
 SCRIPT_RAID_CHECKS="raid_checks.sh"
 SCRIPT_CLEANUP="cleanup_remote_processes.sh"
+SCRIPT_SSH_SETUP="ssh_setup.sh"
 
 # --- Ensure log directory exists ---
 mkdir -p "$LOG_DIR"
@@ -85,6 +100,11 @@ get_raid_devices() {
 
 # --- Preflight local update ---
 log "===== RAID INSTALL START: $(date) ====="
+
+# --- Setup SSH for all targets ---
+log "Setting up passwordless SSH for all targets..."
+bash "$SCRIPTS_DIR/$SCRIPT_SSH_SETUP" "${TARGETS[@]}" || warn "SSH setup completed with warnings. Manual password entry may be required."
+
 log "Updating local system..."
 sudo apt-get update -y >/dev/null
 sudo apt-get upgrade -y >/dev/null
