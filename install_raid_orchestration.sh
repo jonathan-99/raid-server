@@ -105,10 +105,10 @@ log "===== RAID INSTALL START: $(date) ====="
 log "Setting up passwordless SSH for all targets..."
 bash "$SCRIPTS_DIR/$SCRIPT_SSH_SETUP" "${TARGETS[@]}" || warn "SSH setup completed with warnings. Manual password entry may be required."
 
-log "Updating local system..."
-sudo apt-get update -y >/dev/null
-sudo apt-get upgrade -y >/dev/null
-log "Local packages updated."
+log "Updating local system.............POSSIBLY repetition HERE"
+# sudo apt-get update -y >/dev/null
+# sudo apt-get upgrade -y >/dev/null
+log "Local packages updated.......REMOVE?"
 
 # --- Prepare summary file ---
 echo "HOSTNAME,IP,STATUS,RAID_DEVICES,MOUNT_POINT" > "$SUMMARY_FILE"
