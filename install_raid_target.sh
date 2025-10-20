@@ -21,16 +21,16 @@
 
 set -euo pipefail
 
-log()   { printf "[INFO]  %s\n" "$*"; }
-warn()  { printf "[WARN]  %s\n" "$*" >&2; }
-error() { printf "[ERROR] %s\n" "$*" >&2; exit 1; }
+TARGET_HOSTNAME="${HOST:-$(hostname)}"
+log()   { printf "[INFO]  [$TARGET_HOSTNAME] %s\n" "$*"; }
+warn()  { printf "[WARN]  [$TARGET_HOSTNAME] %s\n" "$*" >&2; }
+error() { printf "[ERROR] [$TARGET_HOSTNAME] %s\n" "$*" >&2; exit 1; }
 
 RAID_MOUNT="/mnt/raid"
 RAID_DEVICES=("/dev/sda" "/dev/sdc")   # default; can be adjusted
 RAID_NAME="raid1array"
 
-log "===== RAID INSTALL START: $(date) ====="
-log "Target: $(hostname)"
+log "===== RAID INSTALL START ON $TARGET_HOSTNAME: $(date) ====="
 
 # --- 1️⃣ Device updater ---
 log "Running device updater..."
@@ -86,4 +86,4 @@ fi
 # --- 7️⃣ Save mdadm config ---
 sudo mdadm --detail --scan | sudo tee -a /etc/mdadm/mdadm.conf
 
-log "===== RAID INSTALL COMPLETE: $(date) ====="
+log "===== RAID INSTALL COMPLETE ON [$TARGET_HOSTNAME]: $(date) ====="
