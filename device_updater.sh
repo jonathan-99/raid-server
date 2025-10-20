@@ -16,26 +16,31 @@ log()   { printf "[%s] [INFO]  %s\n" "$TARGET_HOSTNAME" "$*" | tee -a "$LOG_FILE
 warn()  { printf "[%s] [WARN]  %s\n" "$TARGET_HOSTNAME" "$*" | tee -a "$LOG_FILE" >&2; }
 error() { printf "[%s] [ERROR] %s\n" "$TARGET_HOSTNAME" "$*" | tee -a "$LOG_FILE" >&2; exit 1; }
 
-# --- Step 0: Pre-check for existing RAID setup ---
+log "Starting device updater on ${TARGET_HOSTNAME}..."
+log "Checking for existing RAID setup..."
+
+# --- Step 0: Detect existing RAID ---
 if command -v mdadm >/dev/null 2>&1; then
     if grep -q "/dev/md" /proc/mdstat 2>/dev/null; then
         if mountpoint -q /mnt/raid; then
-            log "Detected existing RAID array and /mnt/raid mount. Skipping installation."
+            log "Existing RAID array and /mnt/raid mount detected — skipping installation."
             exit 0
         else
-            warn "mdadm detected and RAID array present, but /mnt/raid not mounted. Manual verification recommended."
+            warn "RAID array detected but /mnt/raid is not mounted — manual inspection advised."
             exit 0
         fi
     fi
 fi
 
+# --- Step 1: Update and upgrade system ---
 log "Updating system packages..."
 export DEBIAN_FRONTEND=noninteractive
 sudo apt-get update -y | stdbuf -oL tee -a "$LOG_FILE"
 sudo apt-get full-upgrade -y | stdbuf -oL tee -a "$LOG_FILE"
 
+# --- Step 2: Install prerequisites ---
 log "Installing prerequisites: mdadm, ufw, python3-pip, python3-venv..."
 sudo apt-get install -y mdadm ufw python3-pip python3-venv --no-install-recommends \
   | stdbuf -oL tee -a "$LOG_FILE"
 
-log "Device updater completed."
+log "Device updater completed successfully."
