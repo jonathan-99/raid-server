@@ -10,7 +10,6 @@
 #   ./install_raid_orchestration.sh one two three
 #
 # DEPENDENCIES:
-#   - ssh_setup.sh
 #   - install_raid_target.sh
 #   - install_raid_server.sh
 #   - device_updater.sh, firewall_setup.sh, raid_checks.sh
@@ -96,7 +95,32 @@ echo
 echo "HOSTNAME,IP,STATUS,RAID_DEVICES,MOUNT_POINT" > "$SUMMARY_FILE"
 log "Preparing RAID installation orchestration for ${#TARGETS[@]} targets..."
 
-# --- Loop over targets ---
+# ============================================================
+# SSH SETUP SECTION
+# ============================================================
+for target in "${TARGETS[@]}"; do
+    log "Checking SSH access for ${target}..."
+
+    if ssh -o BatchMode=yes -o ConnectTimeout=5 -p "$SSH_PORT" "${SSH_USER}@${target}" 'echo 2>&1' >/dev/null 2>&1; then
+        log "Passwordless SSH already works for ${target}."
+    else
+        log "Setting up SSH key for passwordless access to ${target}..."
+        ssh-copy-id -o StrictHostKeyChecking=no -p "$SSH_PORT" "${SSH_USER}@${target}" || \
+            warn "ssh-copy-id failed for ${target}. You may be prompted for passwords later."
+
+        # Verify again
+        if ssh -o BatchMode=yes -o ConnectTimeout=5 -p "$SSH_PORT" "${SSH_USER}@${target}" 'echo 2>&1' >/dev/null 2>&1; then
+            log "Passwordless SSH setup successful for ${target}."
+        else
+            warn "Passwordless SSH still not working for ${target}. Continuing with password prompts..."
+        fi
+    fi
+done
+echo
+
+# ============================================================
+# MAIN ORCHESTRATION LOOP
+# ============================================================
 for target in "${TARGETS[@]}"; do
     TARGET_LOG="${LOG_DIR}/install_${target}.log"
     echo "--------------------------------------------------------------------------------" | tee -a "$TARGET_LOG"
