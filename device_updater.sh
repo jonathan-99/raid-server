@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-# Device updater script
-# Updates OS packages and installs prerequisites
+# ============================================================
+# device_updater.sh
+# ------------------------------------------------------------
+# ROLE:
+#   Updates OS packages and installs prerequisites for RAID target.
+#   Detects if RAID already exists and exits early if so.
+# ============================================================
 
 set -euo pipefail
 
@@ -10,6 +15,19 @@ LOG_FILE="/tmp/raid_target_${TARGET_HOSTNAME}.log"
 log()   { printf "[%s] [INFO]  %s\n" "$TARGET_HOSTNAME" "$*" | tee -a "$LOG_FILE"; }
 warn()  { printf "[%s] [WARN]  %s\n" "$TARGET_HOSTNAME" "$*" | tee -a "$LOG_FILE" >&2; }
 error() { printf "[%s] [ERROR] %s\n" "$TARGET_HOSTNAME" "$*" | tee -a "$LOG_FILE" >&2; exit 1; }
+
+# --- Step 0: Pre-check for existing RAID setup ---
+if command -v mdadm >/dev/null 2>&1; then
+    if grep -q "/dev/md" /proc/mdstat 2>/dev/null; then
+        if mountpoint -q /mnt/raid; then
+            log "Detected existing RAID array and /mnt/raid mount. Skipping installation."
+            exit 0
+        else
+            warn "mdadm detected and RAID array present, but /mnt/raid not mounted. Manual verification recommended."
+            exit 0
+        fi
+    fi
+fi
 
 log "Updating system packages..."
 export DEBIAN_FRONTEND=noninteractive
