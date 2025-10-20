@@ -122,18 +122,26 @@ for target in "${TARGETS[@]}"; do
         STATUS="FAILURE"
     fi
 
-    # 4️⃣ Post-cleanup
-    cleanup_remote "$target"
-
-    # 5️⃣ Gather details for summary
+    # 4️⃣ Gather details for summary
     IP_ADDR=$(get_host_ip "$target")
     RAID_DEVICES=$(get_raid_devices "$target")
     MOUNT_POINT=$(ssh -p "$SSH_PORT" "${SSH_USER}@${target}" \
         "grep -m1 'Mounting RAID at' /tmp/raid_target_${target}.log | awk '{print \$NF}'" 2>/dev/null)
     [[ -z "$MOUNT_POINT" ]] && MOUNT_POINT="/mnt/raid"
 
-    printf "%s,%s,%s,%s,%s\n" "$target" "$IP_ADDR" "$STATUS" "$RAID_DEVICES" "$MOUNT_POINT" >> "$SUMMARY_FILE"
+    printf "%s,%s,%s,%s,%s\n" \
+        "$target" "$IP_ADDR" "$STATUS" "$RAID_DEVICES" "$MOUNT_POINT" >> "$SUMMARY_FILE"
     log "[${target}] Installation ${STATUS}"
+
+    # 5️⃣ Post-install cleanup (after capturing logs)
+    log "[${target}] Performing post-install cleanup..."
+    cleanup_remote "$target"
+done
+
+# --- Final cleanup across all targets ---
+log "Performing final cleanup across all targets..."
+for target in "${TARGETS[@]}"; do
+    cleanup_remote "$target"
 done
 
 # --- Summary ---
