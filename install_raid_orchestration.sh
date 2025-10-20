@@ -40,7 +40,7 @@ SCRIPT_CLEANUP="cleanup_remote_processes.sh"
 # --- Ensure log directory exists ---
 mkdir -p "$LOG_DIR"
 
-# --- Helper functions ---
+# --- Logging functions ---
 log()   { printf "[INFO]  %s\n" "$*"; }
 warn()  { printf "[WARN]  %s\n" "$*" >&2; }
 error() { printf "[ERROR] %s\n" "$*" >&2; exit 1; }
@@ -53,7 +53,7 @@ if [[ $# -lt 1 ]]; then
 fi
 TARGETS=("$@")
 
-# --- Utilities ---
+# --- Utility functions ---
 get_host_ip() {
     ssh -p "$SSH_PORT" "${SSH_USER}@${1}" "hostname -I | awk '{print \$1}'" 2>/dev/null || echo "N/A"
 }
@@ -83,44 +83,18 @@ get_raid_devices() {
         "lsblk -ndo NAME,TYPE | awk '\$2==\"disk\" {print \"/dev/\"\$1}' | head -n 2 | tr '\n' ' '" 2>/dev/null || echo "N/A"
 }
 
-# --- Preflight update on orchestrator ---
+# --- Preflight local update ---
 log "===== RAID INSTALL START: $(date) ====="
-log "Running local system update before orchestration..."
+log "Updating local system..."
 sudo apt-get update -y >/dev/null
 sudo apt-get upgrade -y >/dev/null
-log "Local packages updated successfully."
-echo
+log "Local packages updated."
 
 # --- Prepare summary file ---
 echo "HOSTNAME,IP,STATUS,RAID_DEVICES,MOUNT_POINT" > "$SUMMARY_FILE"
-log "Preparing RAID installation orchestration for ${#TARGETS[@]} targets..."
+log "Preparing RAID orchestration for ${#TARGETS[@]} targets..."
 
-# ============================================================
-# SSH SETUP SECTION
-# ============================================================
-for target in "${TARGETS[@]}"; do
-    log "Checking SSH access for ${target}..."
-
-    if ssh -o BatchMode=yes -o ConnectTimeout=5 -p "$SSH_PORT" "${SSH_USER}@${target}" 'echo 2>&1' >/dev/null 2>&1; then
-        log "Passwordless SSH already works for ${target}."
-    else
-        log "Setting up SSH key for passwordless access to ${target}..."
-        ssh-copy-id -o StrictHostKeyChecking=no -p "$SSH_PORT" "${SSH_USER}@${target}" || \
-            warn "ssh-copy-id failed for ${target}. You may be prompted for passwords later."
-
-        # Verify again
-        if ssh -o BatchMode=yes -o ConnectTimeout=5 -p "$SSH_PORT" "${SSH_USER}@${target}" 'echo 2>&1' >/dev/null 2>&1; then
-            log "Passwordless SSH setup successful for ${target}."
-        else
-            warn "Passwordless SSH still not working for ${target}. Continuing with password prompts..."
-        fi
-    fi
-done
-echo
-
-# ============================================================
-# MAIN ORCHESTRATION LOOP
-# ============================================================
+# --- Process each target ---
 for target in "${TARGETS[@]}"; do
     TARGET_LOG="${LOG_DIR}/install_${target}.log"
     echo "--------------------------------------------------------------------------------" | tee -a "$TARGET_LOG"
@@ -130,10 +104,9 @@ for target in "${TARGETS[@]}"; do
     log "[${target}] Performing pre-cleanup..."
     cleanup_remote "$target"
 
-    # 2️⃣ Copy all scripts
-    for script in \
-        "$SCRIPT_INSTALL_TARGET" "$SCRIPT_INSTALL_RAID" "$SCRIPT_DEVICE_UPDATER" \
-        "$SCRIPT_FIREWALL_SETUP" "$SCRIPT_RAID_CHECKS" "$SCRIPT_CLEANUP"; do
+    # 2️⃣ Copy scripts
+    for script in "$SCRIPT_INSTALL_TARGET" "$SCRIPT_INSTALL_RAID" "$SCRIPT_DEVICE_UPDATER" \
+                  "$SCRIPT_FIREWALL_SETUP" "$SCRIPT_RAID_CHECKS" "$SCRIPT_CLEANUP"; do
         copy_script "$target" "$script" "$TARGET_LOG"
     done
 
@@ -146,7 +119,7 @@ for target in "${TARGETS[@]}"; do
         STATUS="FAILURE"
     fi
 
-    # 4️⃣ Gather details for summary
+    # 4️⃣ Gather summary info
     IP_ADDR=$(get_host_ip "$target")
     RAID_DEVICES=$(get_raid_devices "$target")
     MOUNT_POINT=$(ssh -p "$SSH_PORT" "${SSH_USER}@${target}" \
@@ -157,12 +130,12 @@ for target in "${TARGETS[@]}"; do
         "$target" "$IP_ADDR" "$STATUS" "$RAID_DEVICES" "$MOUNT_POINT" >> "$SUMMARY_FILE"
     log "[${target}] Installation ${STATUS}"
 
-    # 5️⃣ Post-install cleanup (after capturing logs)
+    # 5️⃣ Post-install cleanup
     log "[${target}] Performing post-install cleanup..."
     cleanup_remote "$target"
 done
 
-# --- Final cleanup across all targets ---
+# --- Final cleanup ---
 log "Performing final cleanup across all targets..."
 for target in "${TARGETS[@]}"; do
     cleanup_remote "$target"
