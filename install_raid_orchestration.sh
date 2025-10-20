@@ -84,11 +84,19 @@ get_raid_devices() {
         "lsblk -ndo NAME,TYPE | awk '\$2==\"disk\" {print \"/dev/\"\$1}' | head -n 2 | tr '\n' ' '" 2>/dev/null || echo "N/A"
 }
 
-# --- Start orchestration ---
+# --- Preflight update on orchestrator ---
 log "===== RAID INSTALL START: $(date) ====="
+log "Running local system update before orchestration..."
+sudo apt-get update -y >/dev/null
+sudo apt-get upgrade -y >/dev/null
+log "Local packages updated successfully."
+echo
+
+# --- Prepare summary file ---
 echo "HOSTNAME,IP,STATUS,RAID_DEVICES,MOUNT_POINT" > "$SUMMARY_FILE"
 log "Preparing RAID installation orchestration for ${#TARGETS[@]} targets..."
 
+# --- Loop over targets ---
 for target in "${TARGETS[@]}"; do
     TARGET_LOG="${LOG_DIR}/install_${target}.log"
     echo "--------------------------------------------------------------------------------" | tee -a "$TARGET_LOG"
@@ -128,6 +136,7 @@ for target in "${TARGETS[@]}"; do
     log "[${target}] Installation ${STATUS}"
 done
 
+# --- Summary ---
 log "===== RAID INSTALL COMPLETE: $(date) ====="
 log "Summary written to: $SUMMARY_FILE"
 echo "----------------------------------------------------------------------------------------------------"
